@@ -1,0 +1,25 @@
+[workspace]
+name = "pmca"
+version = "0.1.0"
+channels = ["conda-forge"]
+platforms = ["linux-64"]
+
+[dependencies]
+python = ">=3.11"
+
+[pypi-dependencies]
+openai = ">=1.0"
+numpy = ">=1.26"
+pyyaml = ">=6.0"
+prompt_toolkit = ">=3.0"
+pmca = { path = ".", editable = true }
+
+[feature.dev.pypi-dependencies]
+pytest = ">=8.0"
+
+[environments]
+default = { features = ["dev"], solve-group = "default" }
+
+[tasks]
+test = "pytest"
+pmca = "pmca"
