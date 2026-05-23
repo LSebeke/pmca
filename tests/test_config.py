@@ -1,0 +1,254 @@
+import os
+import textwrap
+from pathlib import Path
+
+import pytest
+
+from pmca.config import Config, ConfigError, load_config
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def write_yaml(tmp_path: Path, name: str, content: str) -> Path:
+    p = tmp_path / name
+    p.write_text(textwrap.dedent(content))
+    return p
+
+
+def minimal_yaml(rag_file: Path, log_folder: Path) -> str:
+    return f"""\
+name: TestConfig
+model: gpt-4o-mini
+system_prompt: "You are helpful."
+rag_files:
+  - {rag_file}
+top_k_chunks: 3
+log_folder: {log_folder}
+"""
+
+
+# ---------------------------------------------------------------------------
+# Load valid config
+# ---------------------------------------------------------------------------
+
+def test_load_valid_config_returns_config(tmp_path):
+    rag_file = tmp_path / "code.py"
+    rag_file.write_text("x = 1")
+    log_folder = tmp_path / "logs"
+
+    cfg_path = write_yaml(tmp_path, "MyConfig.yaml", minimal_yaml(rag_file, log_folder))
+
+    cfg = load_config(str(cfg_path))
+
+    assert isinstance(cfg, Config)
+    assert cfg.name == "TestConfig"
+    assert cfg.model == "gpt-4o-mini"
+    assert cfg.system_prompt == "You are helpful."
+    assert cfg.rag_files == [rag_file]
+    assert cfg.top_k_chunks == 3
+    assert cfg.log_folder == log_folder
+
+
+# ---------------------------------------------------------------------------
+# Config resolution
+# ---------------------------------------------------------------------------
+
+def test_bare_name_resolves_to_package_configs_dir(tmp_path, monkeypatch):
+    """A name with no path separators and no .yaml suffix resolves to
+    <pmca_package_dir>/configs/<name>.yaml."""
+    import pmca.config as config_module
+
+    rag_file = tmp_path / "code.py"
+    rag_file.write_text("x = 1")
+    log_folder = tmp_path / "logs"
+
+    fake_configs = tmp_path / "fake_configs"
+    fake_configs.mkdir()
+    write_yaml(fake_configs, "MyConfig.yaml", minimal_yaml(rag_file, log_folder))
+
+    monkeypatch.setattr(config_module, "_CONFIGS_DIR", fake_configs)
+
+    cfg = load_config("MyConfig")
+    assert cfg.name == "TestConfig"
+
+
+def test_path_like_with_slash_used_directly(tmp_path):
+    rag_file = tmp_path / "code.py"
+    rag_file.write_text("x = 1")
+    log_folder = tmp_path / "logs"
+
+    cfg_path = write_yaml(tmp_path, "custom.yaml", minimal_yaml(rag_file, log_folder))
+
+    cfg = load_config(str(cfg_path))
+    assert cfg.name == "TestConfig"
+
+
+def test_path_like_ending_in_yaml_used_directly(tmp_path):
+    rag_file = tmp_path / "code.py"
+    rag_file.write_text("x = 1")
+    log_folder = tmp_path / "logs"
+
+    cfg_path = write_yaml(tmp_path, "myconfig.yaml", minimal_yaml(rag_file, log_folder))
+
+    cfg = load_config(str(cfg_path))
+    assert cfg.name == "TestConfig"
+
+
+# ---------------------------------------------------------------------------
+# File-not-found
+# ---------------------------------------------------------------------------
+
+def test_raises_config_error_when_file_does_not_exist(tmp_path):
+    with pytest.raises(ConfigError, match="not found"):
+        load_config(str(tmp_path / "nonexistent.yaml"))
+
+
+def test_bare_name_not_found_raises_config_error(tmp_path, monkeypatch):
+    import pmca.config as config_module
+
+    fake_configs = tmp_path / "fake_configs"
+    fake_configs.mkdir()
+
+    monkeypatch.setattr(config_module, "_CONFIGS_DIR", fake_configs)
+
+    with pytest.raises(ConfigError, match="not found"):
+        load_config("NoSuchConfig")
+
+
+# ---------------------------------------------------------------------------
+# Missing required fields
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("missing_field,yaml_snippet", [
+    ("name",         "model: gpt-4o\nsystem_prompt: x\nrag_files: []\ntop_k_chunks: 3\nlog_folder: /tmp/logs\n"),
+    ("model",        "name: x\nsystem_prompt: x\nrag_files: []\ntop_k_chunks: 3\nlog_folder: /tmp/logs\n"),
+    ("system_prompt","name: x\nmodel: gpt-4o\nrag_files: []\ntop_k_chunks: 3\nlog_folder: /tmp/logs\n"),
+    ("top_k_chunks", "name: x\nmodel: gpt-4o\nsystem_prompt: x\nrag_files: []\nlog_folder: /tmp/logs\n"),
+    ("log_folder",   "name: x\nmodel: gpt-4o\nsystem_prompt: x\nrag_files: []\ntop_k_chunks: 3\n"),
+])
+def test_missing_required_field_raises(tmp_path, missing_field, yaml_snippet):
+    cfg_path = write_yaml(tmp_path, "bad.yaml", yaml_snippet)
+    with pytest.raises(ConfigError, match=missing_field):
+        load_config(str(cfg_path))
+
+
+# ---------------------------------------------------------------------------
+# rag_files validation
+# ---------------------------------------------------------------------------
+
+def test_raises_when_rag_file_path_not_absolute(tmp_path):
+    log_folder = tmp_path / "logs"
+    yaml_content = f"""\
+        name: x
+        model: gpt-4o
+        system_prompt: x
+        rag_files:
+          - relative/path/file.py
+        top_k_chunks: 3
+        log_folder: {log_folder}
+    """
+    cfg_path = write_yaml(tmp_path, "bad.yaml", yaml_content)
+    with pytest.raises(ConfigError, match="absolute"):
+        load_config(str(cfg_path))
+
+
+def test_raises_when_rag_file_does_not_exist(tmp_path):
+    log_folder = tmp_path / "logs"
+    yaml_content = f"""\
+        name: x
+        model: gpt-4o
+        system_prompt: x
+        rag_files:
+          - /nonexistent/path/file.py
+        top_k_chunks: 3
+        log_folder: {log_folder}
+    """
+    cfg_path = write_yaml(tmp_path, "bad.yaml", yaml_content)
+    with pytest.raises(ConfigError, match="not found|does not exist"):
+        load_config(str(cfg_path))
+
+
+# ---------------------------------------------------------------------------
+# log_folder validation
+# ---------------------------------------------------------------------------
+
+def test_raises_when_log_folder_not_absolute(tmp_path):
+    rag_file = tmp_path / "code.py"
+    rag_file.write_text("x = 1")
+    yaml_content = f"""\
+        name: x
+        model: gpt-4o
+        system_prompt: x
+        rag_files:
+          - {rag_file}
+        top_k_chunks: 3
+        log_folder: relative/logs
+    """
+    cfg_path = write_yaml(tmp_path, "bad.yaml", yaml_content)
+    with pytest.raises(ConfigError, match="absolute"):
+        load_config(str(cfg_path))
+
+
+# ---------------------------------------------------------------------------
+# Optional field defaults
+# ---------------------------------------------------------------------------
+
+def test_optional_fields_default_correctly(tmp_path):
+    rag_file = tmp_path / "code.py"
+    rag_file.write_text("x = 1")
+    log_folder = tmp_path / "logs"
+
+    cfg_path = write_yaml(tmp_path, "MyConfig.yaml", minimal_yaml(rag_file, log_folder))
+    cfg = load_config(str(cfg_path))
+
+    assert cfg.max_attachment_kb == 500
+    assert cfg.history_token_budget == 4000
+    assert cfg.temperature is None
+    assert cfg.max_tokens is None
+    assert cfg.top_p is None
+    assert cfg.frequency_penalty is None
+    assert cfg.presence_penalty is None
+
+
+def test_optional_fields_override(tmp_path):
+    rag_file = tmp_path / "code.py"
+    rag_file.write_text("x = 1")
+    log_folder = tmp_path / "logs"
+
+    yaml_content = minimal_yaml(rag_file, log_folder) + textwrap.dedent("""\
+        max_attachment_kb: 200
+        history_token_budget: 2000
+        temperature: 0.7
+        max_tokens: 1000
+        top_p: 0.9
+        frequency_penalty: 0.1
+        presence_penalty: 0.2
+    """)
+    cfg_path = write_yaml(tmp_path, "MyConfig.yaml", yaml_content)
+    cfg = load_config(str(cfg_path))
+
+    assert cfg.max_attachment_kb == 200
+    assert cfg.history_token_budget == 2000
+    assert cfg.temperature == pytest.approx(0.7)
+    assert cfg.max_tokens == 1000
+    assert cfg.top_p == pytest.approx(0.9)
+    assert cfg.frequency_penalty == pytest.approx(0.1)
+    assert cfg.presence_penalty == pytest.approx(0.2)
+
+
+# ---------------------------------------------------------------------------
+# Unknown keys ignored
+# ---------------------------------------------------------------------------
+
+def test_unknown_yaml_keys_are_ignored(tmp_path):
+    rag_file = tmp_path / "code.py"
+    rag_file.write_text("x = 1")
+    log_folder = tmp_path / "logs"
+
+    yaml_content = minimal_yaml(rag_file, log_folder) + "unknown_key: some_value\n"
+    cfg_path = write_yaml(tmp_path, "MyConfig.yaml", yaml_content)
+
+    cfg = load_config(str(cfg_path))
+    assert cfg.name == "TestConfig"
