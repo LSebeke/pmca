@@ -339,6 +339,15 @@ def test_extract_toml_block(tmp_path):
     assert out.read_text() == content
 
 
+def test_extract_md_block(tmp_path):
+    content = "# Title\n\nSome content."
+    msg = f"```markdown\n{content}\n```"
+    session = _session(history=[{"role": "assistant", "content": msg}])
+    out = tmp_path / "notes.md"
+    handle_command(f"/extract {out}", session)
+    assert out.read_text() == content
+
+
 def test_extract_unknown_extension_prints_error(tmp_path, capsys):
     session = _session(history=[{"role": "assistant", "content": "```text\nhello\n```"}])
     out = tmp_path / "out.txt"

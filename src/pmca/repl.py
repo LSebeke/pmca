@@ -135,6 +135,7 @@ _EXT_TO_FENCE: dict[str, str] = {
     ".json": "json",
     ".toml": "toml",
     ".sh": "bash",
+    ".md": "markdown",
 }
 
 
