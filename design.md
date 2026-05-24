@@ -325,17 +325,26 @@ def handle_command(cmd: str, session: ChatSession) -> None:
     """
     /set <param>=<value>  — update session.top_k or session.history_token_budget
     /rag                  — print session._last_rag_chunks
-    /extract <path>       — write all Python code blocks from last response to <path>
+    /extract <path>       — write code blocks from last response to <path> (fence language inferred from extension)
     /help                 — print command reference
     /exit                 — raise SystemExit
     """
 
-def _extract_python(cmd: str, session: ChatSession) -> None:
+_EXT_TO_FENCE: dict[str, str] = {
+    ".py": "python",
+    ".yaml": "yaml", ".yml": "yaml",
+    ".json": "json",
+    ".toml": "toml",
+    ".sh": "bash",
+}
+
+def _extract(cmd: str, session: ChatSession) -> None:
     """
-    Parse an absolute file path from cmd. Find all ```python ... ``` fenced blocks
-    in the last assistant message (session.history[-1]). Write them to the path,
-    separated by blank lines. Print an error if no argument, no history, or no
-    code blocks found.
+    Parse an absolute file path from cmd. Infer the fence language from the
+    file extension using _EXT_TO_FENCE. Find all fenced blocks of that language
+    in the last assistant message (session.history[-1]). Write them to the path
+    separated by blank lines. Print an error if: no argument given, extension is
+    unknown (list supported extensions), no history, or no matching blocks found.
     """
 ```
 
@@ -434,7 +443,7 @@ Config resolution:
 | `/set chunksize=N` | Set top-k RAG retrieval count for this session |
 | `/set history_token_budget=N` | Set history token budget for this session |
 | `/rag` | Print RAG chunks retrieved for the last query |
-| `/extract <path>` | Extract all Python code blocks from the last response into `<path>` (absolute path required) |
+| `/extract <path>` | Extract code blocks from the last response into `<path>`; fence language inferred from extension (`.py`, `.yaml`/`.yml`, `.json`, `.toml`, `.sh`) |
 | `/help` | Print command reference and key bindings |
 | `/exit` | End session (also: Ctrl+C) |
 

@@ -15,7 +15,7 @@ Commands:
   /set chunksize=N            Set top-k RAG retrieval count for this session
   /set history_token_budget=N Set history token budget for this session
   /rag                        Print RAG chunks retrieved for the last query
-  /extract <path>             Extract Python code blocks from last response into <path>
+  /extract <path>             Extract code blocks from last response into <path> (type inferred from extension)
   /help                       Print this help message
   /exit                       End session
 
@@ -87,7 +87,7 @@ def handle_command(cmd: str, session: ChatSession) -> None:
         return
 
     if name == "/extract":
-        _extract_python(parts[1] if len(parts) > 1 else "", session)
+        _extract(parts[1] if len(parts) > 1 else "", session)
         return
 
     print(f"Unknown command: {name}")
@@ -120,10 +120,27 @@ def _handle_set(arg: str, session: ChatSession) -> None:
     print(f"{key} = {value}")
 
 
-def _extract_python(arg: str, session: ChatSession) -> None:
+_EXT_TO_FENCE: dict[str, str] = {
+    ".py": "python",
+    ".yaml": "yaml",
+    ".yml": "yaml",
+    ".json": "json",
+    ".toml": "toml",
+    ".sh": "bash",
+}
+
+
+def _extract(arg: str, session: ChatSession) -> None:
     arg = arg.strip()
     if not arg:
         print("Error: usage: /extract <absolute-path>")
+        return
+
+    path = Path(arg)
+    fence = _EXT_TO_FENCE.get(path.suffix)
+    if fence is None:
+        supported = ", ".join(sorted(_EXT_TO_FENCE))
+        print(f"Error: unsupported extension '{path.suffix}'. Supported: {supported}")
         return
 
     if not session.history:
@@ -131,14 +148,14 @@ def _extract_python(arg: str, session: ChatSession) -> None:
         return
 
     last = session.history[-1]["content"]
-    blocks = re.findall(r"```python\n(.*?)```", last, re.DOTALL)
+    blocks = re.findall(rf"```{fence}\n(.*?)```", last, re.DOTALL)
 
     if not blocks:
-        print("No Python code blocks found in last response.")
+        print(f"No {fence} code blocks found in last response.")
         return
 
-    Path(arg).parent.mkdir(parents=True, exist_ok=True)
-    Path(arg).write_text("\n\n".join(b.rstrip("\n") for b in blocks))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n\n".join(b.rstrip("\n") for b in blocks))
     print(f"Wrote {len(blocks)} block(s) to {arg}")
 
 

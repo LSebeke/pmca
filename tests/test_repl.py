@@ -245,3 +245,57 @@ def test_extract_writes_python_block_to_file(tmp_path):
     out = tmp_path / "out.py"
     handle_command(f"/extract {out}", session)
     assert out.read_text() == code
+
+
+def test_extract_yaml_block(tmp_path):
+    content = "key: value\nother: 123"
+    msg = f"```yaml\n{content}\n```"
+    session = _session(history=[{"role": "assistant", "content": msg}])
+    out = tmp_path / "config.yaml"
+    handle_command(f"/extract {out}", session)
+    assert out.read_text() == content
+
+
+def test_extract_yml_extension_matches_yaml_fence(tmp_path):
+    content = "key: value"
+    msg = f"```yaml\n{content}\n```"
+    session = _session(history=[{"role": "assistant", "content": msg}])
+    out = tmp_path / "config.yml"
+    handle_command(f"/extract {out}", session)
+    assert out.read_text() == content
+
+
+def test_extract_json_block(tmp_path):
+    content = '{"key": "value"}'
+    msg = f"```json\n{content}\n```"
+    session = _session(history=[{"role": "assistant", "content": msg}])
+    out = tmp_path / "data.json"
+    handle_command(f"/extract {out}", session)
+    assert out.read_text() == content
+
+
+def test_extract_sh_block(tmp_path):
+    content = "#!/bin/bash\necho hello"
+    msg = f"```bash\n{content}\n```"
+    session = _session(history=[{"role": "assistant", "content": msg}])
+    out = tmp_path / "run.sh"
+    handle_command(f"/extract {out}", session)
+    assert out.read_text() == content
+
+
+def test_extract_toml_block(tmp_path):
+    content = "[tool]\nname = \"pmca\""
+    msg = f"```toml\n{content}\n```"
+    session = _session(history=[{"role": "assistant", "content": msg}])
+    out = tmp_path / "pyproject.toml"
+    handle_command(f"/extract {out}", session)
+    assert out.read_text() == content
+
+
+def test_extract_unknown_extension_prints_error(tmp_path, capsys):
+    session = _session(history=[{"role": "assistant", "content": "```text\nhello\n```"}])
+    out = tmp_path / "out.txt"
+    handle_command(f"/extract {out}", session)
+    err = capsys.readouterr().out
+    assert ".txt" in err or "unsupported" in err.lower() or "supported" in err.lower()
+    assert not out.exists()
