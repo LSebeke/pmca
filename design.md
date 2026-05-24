@@ -326,6 +326,7 @@ def handle_command(cmd: str, session: ChatSession) -> None:
     /set <param>=<value>  — update session.top_k or session.history_token_budget
     /rag                  — print session._last_rag_chunks
     /extract <path>       — write code blocks from last response to <path> (fence language inferred from extension)
+    /clear                — reset session.history and session._last_rag_chunks; print confirmation
     /help                 — print command reference
     /exit                 — raise SystemExit
     """
@@ -444,6 +445,7 @@ Config resolution:
 | `/set history_token_budget=N` | Set history token budget for this session |
 | `/rag` | Print RAG chunks retrieved for the last query |
 | `/extract <path>` | Extract code blocks from the last response into `<path>`; fence language inferred from extension (`.py`, `.yaml`/`.yml`, `.json`, `.toml`, `.sh`) |
+| `/clear` | Clear conversation history and last RAG chunks |
 | `/help` | Print command reference and key bindings |
 | `/exit` | End session (also: Ctrl+C) |
 

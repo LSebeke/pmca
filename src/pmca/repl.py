@@ -16,6 +16,7 @@ Commands:
   /set history_token_budget=N Set history token budget for this session
   /rag                        Print RAG chunks retrieved for the last query
   /extract <path>             Extract code blocks from last response into <path> (type inferred from extension)
+  /clear                      Clear conversation history
   /help                       Print this help message
   /exit                       End session
 
@@ -88,6 +89,12 @@ def handle_command(cmd: str, session: ChatSession) -> None:
 
     if name == "/extract":
         _extract(parts[1] if len(parts) > 1 else "", session)
+        return
+
+    if name == "/clear":
+        session.history = []
+        session._last_rag_chunks = []
+        print("Conversation history cleared.")
         return
 
     print(f"Unknown command: {name}")

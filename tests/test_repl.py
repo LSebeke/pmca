@@ -114,6 +114,11 @@ def test_rag_no_data_prints_notice(capsys):
 # handle_command — /help
 # ---------------------------------------------------------------------------
 
+def test_help_mentions_clear(capsys):
+    handle_command("/help", _session())
+    assert "/clear" in capsys.readouterr().out
+
+
 def test_help_mentions_set(capsys):
     handle_command("/help", _session())
     assert "/set" in capsys.readouterr().out
@@ -195,6 +200,28 @@ def test_keyboard_interrupt_exits_loop():
     mock_prompt.prompt.side_effect = [KeyboardInterrupt()]
     with patch("pmca.repl.PromptSession", return_value=mock_prompt):
         run_repl(session, MagicMock())  # should not raise
+
+
+# ---------------------------------------------------------------------------
+# handle_command — /clear
+# ---------------------------------------------------------------------------
+
+def test_clear_prints_confirmation(capsys):
+    session = _session(history=[{"role": "user", "content": "hi"}], _last_rag_chunks=[])
+    handle_command("/clear", session)
+    assert "Conversation history cleared." in capsys.readouterr().out
+
+
+def test_clear_resets_history():
+    session = _session(history=[{"role": "user", "content": "hi"}, {"role": "assistant", "content": "hello"}])
+    handle_command("/clear", session)
+    assert session.history == []
+
+
+def test_clear_resets_last_rag_chunks():
+    session = _session(_last_rag_chunks=[_chunk(), _chunk("fn `bar`")])
+    handle_command("/clear", session)
+    assert session._last_rag_chunks == []
 
 
 # ---------------------------------------------------------------------------
