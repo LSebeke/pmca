@@ -8,7 +8,6 @@ from prompt_toolkit.history import InMemoryHistory
 from prompt_toolkit.key_binding import KeyBindings
 
 from pmca.chat import ChatSession
-from pmca.logger import SessionLogger
 
 _HELP = """\
 Commands:
@@ -31,7 +30,7 @@ _SETTABLE = {
 }
 
 
-def run_repl(session: ChatSession, logger: SessionLogger) -> None:
+def run_repl(session: ChatSession) -> None:
     bindings = KeyBindings()
 
     @bindings.add("escape")
@@ -94,7 +93,9 @@ def handle_command(cmd: str, session: ChatSession) -> None:
     if name == "/clear":
         session.history = []
         session._last_rag_chunks = []
-        print("Conversation history cleared.")
+        session.resumed_context = None
+        new_path = session.rotate_logger()
+        print(f"Conversation history cleared. New session: {new_path}")
         return
 
     print(f"Unknown command: {name}")

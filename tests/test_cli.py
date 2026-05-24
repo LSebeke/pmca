@@ -60,26 +60,26 @@ def test_main_passes_session_to_run_repl(config_file):
                 _run(["pmca", str(config_file)])
 
     session_instance = MockSession.return_value
-    mock_repl.assert_called_once_with(session_instance, mock_repl.call_args[0][1])
+    mock_repl.assert_called_once_with(session_instance)
 
 
 def test_main_closes_logger_on_exit(config_file):
     with patch("pmca.cli.VectorStore"):
         with patch("pmca.cli.run_repl"):
-            with patch("pmca.cli.SessionLogger") as MockLogger:
+            with patch("pmca.cli.ChatSession") as MockSession:
                 _run(["pmca", str(config_file)])
 
-    MockLogger.return_value.close.assert_called_once()
+    MockSession.return_value.logger.close.assert_called_once()
 
 
 def test_main_closes_logger_even_when_repl_raises(config_file):
     with patch("pmca.cli.VectorStore"):
         with patch("pmca.cli.run_repl", side_effect=RuntimeError("boom")):
-            with patch("pmca.cli.SessionLogger") as MockLogger:
+            with patch("pmca.cli.ChatSession") as MockSession:
                 with pytest.raises(RuntimeError):
                     _run(["pmca", str(config_file)])
 
-    MockLogger.return_value.close.assert_called_once()
+    MockSession.return_value.logger.close.assert_called_once()
 
 
 # ---------------------------------------------------------------------------

@@ -253,6 +253,13 @@ class ChatSession:
           8. Return (assistant_response, turns_dropped, last_rag_chunks).
         """
 
+    def rotate_logger(self) -> Path:
+        """
+        Close the current logger, open a new one with a fresh timestamp in
+        config.log_folder, assign it to self.logger, and return the path of
+        the new JSONL file.
+        """
+
     def _trim_history(self) -> int:
         """
         Drop oldest turns (user+assistant pairs) until history fits within
@@ -375,7 +382,7 @@ Chunk: function `foo` (lines 1–10)
 **Responsibilities:** Run the interactive input loop using `prompt_toolkit`. Dispatch slash commands. Print chat output.
 
 ```python
-def run_repl(session: ChatSession, logger: SessionLogger) -> None:
+def run_repl(session: ChatSession) -> None:
     """
     Main loop:
       - Read input via prompt_toolkit (history enabled for ↑ recall; Esc clears input).
@@ -388,7 +395,8 @@ def handle_command(cmd: str, session: ChatSession) -> None:
     /set <param>=<value>  — update session.top_k or session.history_token_budget
     /rag                  — print session._last_rag_chunks
     /extract <path>       — write code blocks from last response to <path> (fence language inferred from extension)
-    /clear                — reset session.history and session._last_rag_chunks; print confirmation
+    /clear                — reset session.history, session._last_rag_chunks, and session.resumed_context;
+                            call session.rotate_logger(); print "Conversation history cleared. New session: <path>"
     /help                 — print command reference
     /exit                 — raise SystemExit
     """
@@ -429,8 +437,8 @@ def main() -> None:
     # 6. Build VectorStore (prints progress)
     # 7. Instantiate ChatSession; if resuming, set session.history and resumed_context
     # 8. If resuming: print "Resumed N turns from <path>" and "[last response]\n<msg>"
-    # 9. run_repl(session, logger)
-    # 10. On exit: logger.close()
+    # 9. run_repl(session)
+    # 10. On exit: session.logger.close()
 ```
 
 ---
@@ -532,7 +540,7 @@ History trimming is lazy: the first `session.process()` call runs `_trim_history
 | `/set history_token_budget=N` | Set history token budget for this session |
 | `/rag` | Print RAG chunks retrieved for the last query |
 | `/extract <path>` | Extract code blocks from the last response into `<path>`; fence language inferred from extension (`.py`, `.yaml`/`.yml`, `.json`, `.toml`, `.sh`) |
-| `/clear` | Clear conversation history and last RAG chunks |
+| `/clear` | Clear conversation history, last RAG chunks, and resumed context; rotate to a new log file; print new log path |
 | `/help` | Print command reference and key bindings |
 | `/exit` | End session (also: Ctrl+C) |
 

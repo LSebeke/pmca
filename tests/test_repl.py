@@ -25,17 +25,16 @@ def _chunk(label: str = "fn `foo`") -> Chunk:
     return Chunk(content="def foo(): pass", source_file=Path("/a.py"), label=label)
 
 
-def _run(inputs: list, session=None, logger=None):
+def _run(inputs: list, session=None):
     """Run the REPL with a fixed sequence of inputs, exiting on EOFError."""
     s = session or _session()
     if session is None:
         s.process.return_value = ("response", 0)
-    l = logger or MagicMock()
     mock_prompt = MagicMock()
     mock_prompt.prompt.side_effect = inputs + [EOFError()]
     with patch("pmca.repl.PromptSession", return_value=mock_prompt):
-        run_repl(s, l)
-    return s, l
+        run_repl(s)
+    return s
 
 
 # ---------------------------------------------------------------------------
@@ -148,7 +147,7 @@ def test_exit_raises_system_exit():
 # ---------------------------------------------------------------------------
 
 def test_non_command_calls_process():
-    session, _ = _run(["what is python?"])
+    session = _run(["what is python?"])
     session.process.assert_called_once_with("what is python?")
 
 
@@ -184,7 +183,7 @@ def test_aborted_message_no_response_printed(capsys):
 
 
 def test_empty_input_skipped():
-    session, _ = _run(["", "  ", "hello"])
+    session = _run(["", "  ", "hello"])
     session.process.assert_called_once_with("hello")
 
 
@@ -199,7 +198,7 @@ def test_keyboard_interrupt_exits_loop():
     mock_prompt = MagicMock()
     mock_prompt.prompt.side_effect = [KeyboardInterrupt()]
     with patch("pmca.repl.PromptSession", return_value=mock_prompt):
-        run_repl(session, MagicMock())  # should not raise
+        run_repl(session)  # should not raise
 
 
 # ---------------------------------------------------------------------------
@@ -222,6 +221,27 @@ def test_clear_resets_last_rag_chunks():
     session = _session(_last_rag_chunks=[_chunk(), _chunk("fn `bar`")])
     handle_command("/clear", session)
     assert session._last_rag_chunks == []
+
+
+def test_clear_resets_resumed_context():
+    session = _session(resumed_context="some prior context")
+    handle_command("/clear", session)
+    assert session.resumed_context is None
+
+
+def test_clear_calls_rotate_logger():
+    session = _session()
+    handle_command("/clear", session)
+    session.rotate_logger.assert_called_once()
+
+
+def test_clear_prints_new_session_path(capsys):
+    session = _session()
+    session.rotate_logger.return_value = Path("/logs/chat_2026-05-24_14-00-00.jsonl")
+    handle_command("/clear", session)
+    out = capsys.readouterr().out
+    assert "New session:" in out
+    assert "/logs/chat_2026-05-24_14-00-00.jsonl" in out
 
 
 # ---------------------------------------------------------------------------

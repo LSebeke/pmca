@@ -62,6 +62,6 @@ def main() -> None:
             print(f"Resumed {turn_count} turn(s) from {resumed.jsonl_path}")
             print(f"[last response]\n{resumed.last_assistant_message}")
 
-        run_repl(session, logger)
+        run_repl(session)
     finally:
-        logger.close()
+        session.logger.close()

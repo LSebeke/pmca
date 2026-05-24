@@ -365,6 +365,37 @@ def test_trim_history_returns_count_of_dropped_pairs():
     assert dropped == 2
 
 
+# ---------------------------------------------------------------------------
+# rotate_logger
+# ---------------------------------------------------------------------------
+
+def test_rotate_logger_closes_old_logger():
+    session, _, old_logger = _make_session()
+    with patch("pmca.chat.SessionLogger"):
+        with patch("pmca.chat.datetime") as mock_dt:
+            mock_dt.now.return_value.strftime.return_value = "2026-05-24_12-00-00"
+            session.rotate_logger()
+    old_logger.close.assert_called_once()
+
+
+def test_rotate_logger_assigns_new_logger():
+    session, _, old_logger = _make_session()
+    with patch("pmca.chat.SessionLogger") as MockLogger:
+        with patch("pmca.chat.datetime") as mock_dt:
+            mock_dt.now.return_value.strftime.return_value = "2026-05-24_12-00-01"
+            session.rotate_logger()
+    assert session.logger is MockLogger.return_value
+
+
+def test_rotate_logger_returns_new_jsonl_path():
+    session, _, _ = _make_session(_config(log_folder=Path("/tmp/logs")))
+    with patch("pmca.chat.SessionLogger"):
+        with patch("pmca.chat.datetime") as mock_dt:
+            mock_dt.now.return_value.strftime.return_value = "2026-05-24_12-00-02"
+            result = session.rotate_logger()
+    assert result == Path("/tmp/logs/chat_2026-05-24_12-00-02.jsonl")
+
+
 def test_trim_history_returns_turned_dropped_in_process():
     session, store, _ = _make_session(_config(history_token_budget=1))
     session.history = [

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
 
 from pmca.attachments import AttachmentAborted, parse_attachment_paths, resolve_attachments, substitute_identifiers
@@ -56,6 +57,12 @@ class ChatSession:
         self.logger.log_exchange(message, response, rag_chunks, attachments)
 
         return response, turns_dropped
+
+    def rotate_logger(self) -> Path:
+        self.logger.close()
+        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        self.logger = SessionLogger(self.config.log_folder, timestamp)
+        return self.config.log_folder / f"chat_{timestamp}.jsonl"
 
     def _trim_history(self) -> int:
         dropped = 0
