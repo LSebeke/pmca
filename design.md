@@ -19,6 +19,7 @@ pmca/
 ├── attachments.py      # [[filepath]] parsing, validation, security prompt
 ├── openai_client.py    # OpenAI API calls with retry logic
 ├── logger.py           # JSONL chat log + debug log writer
+├── resume.py           # JSONL resume: parse log, validate, extract history + context
 └── rag/
     ├── chunker.py      # File → Chunk list (semantic / AST-based)
     ├── embedder.py     # Thin embed() interface over OpenAI embeddings
@@ -83,10 +84,12 @@ class Attachment:
         {"label": "...", "source": "...", "content": "..."}
     ],
     "attachments": [                        # present on user turns only
-        {"identifier": "CONTEXT_1", "path": "...", "size_warning": false}
+        {"identifier": "CONTEXT_1", "path": "...", "content": "...", "size_warning": false}
     ]
 }
 ```
+
+`attachments[].content` stores the verbatim file content so that a resumed session can reconstruct attachment context without re-reading the original files (which may have moved or changed).
 
 ---
 
@@ -235,6 +238,7 @@ class ChatSession:
     top_k: int                  # mutable via /set
     history_token_budget: int   # mutable via /set
     _last_rag_chunks: list[Chunk]  # stored for /rag command
+    resumed_context: str | None  # [RESUMED_CONTEXT] system message body, set at resume time
 
     def process(self, user_input: str) -> str:
         """
@@ -304,11 +308,69 @@ class SessionLogger:
         """Appends timestamped line to debug log."""
 
     def close(self) -> None: ...
+
+    @classmethod
+    def from_existing(cls, jsonl_path: Path) -> "SessionLogger":
+        """
+        Open an existing session's JSONL and debug log in append mode.
+        The debug log path is inferred by replacing the 'chat_' prefix with 'debug_'
+        and the '.jsonl' suffix with '.log' in the same directory.
+        """
 ```
 
 ---
 
-### 4.9 `repl.py`
+### 4.9 `resume.py`
+
+**Responsibilities:** Parse a `chat_<timestamp>.jsonl` file, validate it strictly, and return the data needed to bootstrap a resumed session.
+
+```python
+@dataclass
+class ResumedSession:
+    history: list[dict]             # {"role": "user"|"assistant", "content": str} pairs
+    resumed_context: str            # formatted [RESUMED_CONTEXT] system message body
+    last_assistant_message: str     # for printing at startup
+    jsonl_path: Path                # original path (for logger)
+
+def load_resume(path: Path) -> ResumedSession:
+    """
+    Parse the JSONL at path. Raises ResumeError with a descriptive message on:
+      - File not found
+      - Any line that is not valid JSON or is missing required fields (reports line numbers)
+      - Zero user/assistant turns found after parsing
+
+    On success:
+      - Builds history from all "user"/"assistant" role lines (role + content only).
+      - Collects all unique attachments (by identifier) and RAG chunks across all turns.
+      - Formats them into a single [RESUMED_CONTEXT] system message string.
+      - Returns the last assistant message for startup display.
+    """
+```
+
+The `[RESUMED_CONTEXT]` block format:
+
+```
+[RESUMED_CONTEXT]
+The following attachments and RAG chunks were present in the resumed session.
+
+[CONTEXT_1]
+File: /path/to/file.py
+Type: py
+---
+<verbatim content>
+---
+
+[RAG_1]
+File: /path/to/source.py
+Chunk: function `foo` (lines 1–10)
+---
+<chunk content>
+---
+```
+
+---
+
+### 4.10 `repl.py`
 
 **Responsibilities:** Run the interactive input loop using `prompt_toolkit`. Dispatch slash commands. Print chat output.
 
@@ -356,17 +418,19 @@ def _extract(cmd: str, session: ChatSession) -> None:
 **Responsibilities:** Parse CLI args, bootstrap all components, start REPL.
 
 ```python
-# Usage: pmca <config_name> [--unsafe]
+# Usage: pmca <config_name> [--unsafe] [--resume <path>]
 def main() -> None:
     # 1. Parse args (argparse)
     # 2. load_config(config_name)  — exits with error on failure
     # 3. Validate OPENAI_API_KEY in environment
     # 4. Create log_folder and cache_dir
-    # 5. Instantiate SessionLogger
+    # 5. If --resume: call load_resume(path) — exits with error on failure
+    #    Else: instantiate SessionLogger with fresh timestamp
     # 6. Build VectorStore (prints progress)
-    # 7. Instantiate ChatSession
-    # 8. run_repl(session, logger)
-    # 9. On exit: logger.close()
+    # 7. Instantiate ChatSession; if resuming, set session.history and resumed_context
+    # 8. If resuming: print "Resumed N turns from <path>" and "[last response]\n<msg>"
+    # 9. run_repl(session, logger)
+    # 10. On exit: logger.close()
 ```
 
 ---
@@ -378,7 +442,12 @@ Order sent to OpenAI on each turn:
 ```
 [system]  <config.system_prompt>
 
-[system]  [RAG_1]
+[system]  [RESUMED_CONTEXT]          ← only present when session was resumed
+          <all prior attachments and RAG chunks from loaded log>
+
+[system]  <startup_docs, if any>
+
+[system]  [RAG_1]                    ← fresh RAG for the current turn
           File: /absolute/path/to/file.py
           Chunk: function `parse_config` (lines 15–32)
           ---
@@ -386,7 +455,7 @@ Order sent to OpenAI on each turn:
           ---
           [RAG_2] ...
 
-[system]  [CONTEXT_1]
+[system]  [CONTEXT_1]                ← attachments for the current turn
           File: /absolute/path/to/main.py
           Type: py
           ---
@@ -399,7 +468,7 @@ Order sent to OpenAI on each turn:
 [user]    <current message>
 ```
 
-RAG and attachment system messages are injected fresh each turn; only user/assistant exchanges are stored in history.
+RAG and attachment system messages are injected fresh each turn; only user/assistant exchanges are stored in history. The `[RESUMED_CONTEXT]` block is injected once per session when `session.resumed_context` is set.
 
 ---
 
@@ -423,17 +492,35 @@ Cache invalidation: on load, compare stored `file_hash` (SHA-256 of file *conten
 ## 7. CLI Interface
 
 ```
-pmca <config_name> [--unsafe]
+pmca <config_name> [--unsafe] [--resume <path>]
 ```
 
 | Argument | Required | Description |
 |---|---|---|
 | `config_name` | Yes | Name of config to load (`<name>.yaml`) |
 | `--unsafe` | No | Skip the file-attachment security prompt |
+| `--resume <path>` | No | Path to a `chat_<timestamp>.jsonl` file to resume |
 
 Config resolution:
 - If the argument contains a path separator (`/` or `\`) or ends in `.yaml`: treated as a direct file path (absolute, or relative to cwd)
 - Otherwise: looked up as `<pmca_package_dir>/configs/<name>.yaml`
+
+### Resume behaviour (`--resume`)
+
+When `--resume <path>` is provided:
+
+1. The JSONL file at `<path>` is parsed. Hard errors (exit before REPL) on:
+   - File not found
+   - Zero valid user/assistant turns found
+   - Any malformed (non-JSON or schema-invalid) lines — print offending line numbers
+2. All prior `user`/`assistant` turns are loaded into `session.history` as `{"role": ..., "content": ...}`.
+3. All unique attachments and RAG chunks from the JSONL are collected and injected as a single `[RESUMED_CONTEXT]` system message immediately after `config.system_prompt` in `_build_messages`. This gives the model visibility into prior attachment content referenced in the resumed history.
+4. The logger appends to the original JSONL file (passed path) and to its matching debug log (same directory, filename with `chat_` → `debug_` and `.jsonl` → `.log`).
+5. At startup the REPL prints:
+   - `Resumed N turns from <path>`
+   - `[last response]` followed by the final assistant message from the log
+
+History trimming is lazy: the first `session.process()` call runs `_trim_history` as normal.
 
 ---
 
@@ -471,6 +558,9 @@ Key bindings:
 | Permanent API error (chat) | Print error to chat; log to debug log; session continues |
 | History trimmed | Print `[N earlier turn(s) omitted from context]` in chat UI |
 | Unexpected exit / crash | Partial JSONL log is valid; no finalisation step needed |
+| `--resume` file not found | Print error, exit before session starts |
+| `--resume` file has zero valid turns | Print error, exit before session starts |
+| `--resume` file has malformed lines | Print error with line numbers, exit before session starts |
 
 ---
 

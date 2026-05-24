@@ -13,6 +13,16 @@ class SessionLogger:
         self._jsonl: IO[str] = open(log_folder / f"chat_{timestamp}.jsonl", "a", encoding="utf-8")
         self._log: IO[str] = open(log_folder / f"debug_{timestamp}.log", "a", encoding="utf-8")
 
+    @classmethod
+    def from_existing(cls, jsonl_path: Path) -> "SessionLogger":
+        stem = jsonl_path.stem  # e.g. "chat_2025-01-01_12-00-00"
+        debug_stem = stem.replace("chat_", "debug_", 1)
+        debug_path = jsonl_path.parent / f"{debug_stem}.log"
+        instance = cls.__new__(cls)
+        instance._jsonl = open(jsonl_path, "a", encoding="utf-8")
+        instance._log = open(debug_path, "a", encoding="utf-8")
+        return instance
+
     def log_exchange(
         self,
         user_message: str,
@@ -58,5 +68,6 @@ def _attachment_dict(attachment: Attachment) -> dict:
     return {
         "identifier": attachment.identifier,
         "path": str(attachment.path),
+        "content": attachment.content,
         "size_warning": attachment.size_warning,
     }

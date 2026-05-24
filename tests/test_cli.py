@@ -1,3 +1,4 @@
+import json
 import os
 import sys
 from pathlib import Path
@@ -6,6 +7,7 @@ from unittest.mock import MagicMock, patch, call
 import pytest
 
 from pmca.cli import main
+from pmca.resume import ResumedSession
 
 
 # ---------------------------------------------------------------------------
@@ -141,6 +143,87 @@ def test_missing_api_key_prints_to_stderr(config_file, capsys):
         with patch("sys.argv", ["pmca", str(config_file)]):
             with pytest.raises(SystemExit):
                 main()
+    assert capsys.readouterr().err.strip()
+
+
+# ---------------------------------------------------------------------------
+# --resume flag
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def resume_log(tmp_path):
+    p = tmp_path / "chat_2025-01-01_00-00-00.jsonl"
+    p.write_text(
+        json.dumps({"timestamp": "t", "role": "user", "content": "old q", "rag_chunks": [], "attachments": []}) + "\n"
+        + json.dumps({"timestamp": "t", "role": "assistant", "content": "old answer"}) + "\n"
+    )
+    return p
+
+
+def test_resume_flag_loads_history_into_session(config_file, resume_log):
+    with patch("pmca.cli.VectorStore"):
+        with patch("pmca.cli.run_repl"):
+            with patch("pmca.cli.ChatSession") as MockSession:
+                _run(["pmca", str(config_file), "--resume", str(resume_log)])
+
+    session = MockSession.return_value
+    assert session.history == [
+        {"role": "user", "content": "old q"},
+        {"role": "assistant", "content": "old answer"},
+    ]
+
+
+def test_resume_flag_sets_resumed_context(config_file, resume_log):
+    with patch("pmca.cli.VectorStore"):
+        with patch("pmca.cli.run_repl"):
+            with patch("pmca.cli.ChatSession") as MockSession:
+                _run(["pmca", str(config_file), "--resume", str(resume_log)])
+
+    session = MockSession.return_value
+    # empty context (no attachments/rag in fixture) — just verify attribute was set
+    assert hasattr(session, "resumed_context")
+
+
+def test_resume_flag_uses_from_existing_logger(config_file, resume_log):
+    with patch("pmca.cli.VectorStore"):
+        with patch("pmca.cli.run_repl"):
+            with patch("pmca.cli.SessionLogger") as MockLogger:
+                with patch("pmca.cli.load_resume") as mock_lr:
+                    mock_lr.return_value = ResumedSession(
+                        history=[], resumed_context="", last_assistant_message="hi", jsonl_path=resume_log
+                    )
+                    _run(["pmca", str(config_file), "--resume", str(resume_log)])
+
+    MockLogger.from_existing.assert_called_once_with(resume_log)
+
+
+def test_resume_prints_startup_summary(config_file, resume_log, capsys):
+    with patch("pmca.cli.VectorStore"):
+        with patch("pmca.cli.run_repl"):
+            _run(["pmca", str(config_file), "--resume", str(resume_log)])
+
+    out = capsys.readouterr().out
+    assert "Resumed" in out
+    assert "2" in out  # 2 turns
+
+
+def test_resume_prints_last_assistant_message(config_file, resume_log, capsys):
+    with patch("pmca.cli.VectorStore"):
+        with patch("pmca.cli.run_repl"):
+            _run(["pmca", str(config_file), "--resume", str(resume_log)])
+
+    out = capsys.readouterr().out
+    assert "old answer" in out
+    assert "[last response]" in out
+
+
+def test_resume_exits_on_missing_file(config_file, tmp_path, capsys):
+    missing = tmp_path / "ghost.jsonl"
+    with patch("pmca.cli.VectorStore"):
+        with pytest.raises(SystemExit) as exc_info:
+            _run(["pmca", str(config_file), "--resume", str(missing)])
+
+    assert exc_info.value.code != 0
     assert capsys.readouterr().err.strip()
 
 

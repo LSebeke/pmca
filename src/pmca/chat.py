@@ -26,6 +26,7 @@ class ChatSession:
         self.top_k: int = config.top_k_chunks
         self.history_token_budget: int = config.history_token_budget
         self._last_rag_chunks: list[Chunk] = []
+        self.resumed_context: str | None = None
 
     def process(self, user_input: str) -> tuple[str | None, int]:
         # 1. Attachments
@@ -74,6 +75,9 @@ class ChatSession:
         attachments: list[Attachment],
     ) -> list[dict]:
         messages: list[dict] = [{"role": "system", "content": self.config.system_prompt}]
+
+        if self.resumed_context:
+            messages.append({"role": "system", "content": self.resumed_context})
 
         for path, content in self.config.startup_docs:
             messages.append({"role": "system", "content": _format_startup_doc(path, content)})

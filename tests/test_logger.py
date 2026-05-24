@@ -79,6 +79,61 @@ def test_user_entry_includes_attachments(tmp_path):
     assert user["attachments"][0]["size_warning"] is False
 
 
+def test_user_entry_attachment_includes_content(tmp_path):
+    att = _attachment(tmp_path)
+    logger = SessionLogger(tmp_path, "ts")
+    logger.log_exchange("msg", "resp", [], [att])
+    logger.close()
+
+    user, _ = _read_jsonl(tmp_path / "chat_ts.jsonl")
+    assert user["attachments"][0]["content"] == att.content
+
+
+# ---------------------------------------------------------------------------
+# SessionLogger.from_existing
+# ---------------------------------------------------------------------------
+
+def test_from_existing_appends_to_existing_jsonl(tmp_path):
+    jsonl = tmp_path / "chat_ts.jsonl"
+    SessionLogger(tmp_path, "ts").log_exchange("first", "r1", [], [])
+
+    logger2 = SessionLogger.from_existing(jsonl)
+    logger2.log_exchange("second", "r2", [], [])
+    logger2.close()
+
+    lines = _read_jsonl(jsonl)
+    assert len(lines) == 4
+
+
+def test_from_existing_infers_debug_log_path(tmp_path):
+    jsonl = tmp_path / "chat_2025-01-01_12-00-00.jsonl"
+    SessionLogger(tmp_path, "2025-01-01_12-00-00").log_exchange("x", "y", [], [])
+
+    logger2 = SessionLogger.from_existing(jsonl)
+    logger2.log_debug("resumed debug")
+    logger2.close()
+
+    debug_log = tmp_path / "debug_2025-01-01_12-00-00.log"
+    assert debug_log.exists()
+    assert "resumed debug" in debug_log.read_text()
+
+
+def test_from_existing_appends_to_existing_debug_log(tmp_path):
+    jsonl = tmp_path / "chat_ts.jsonl"
+    logger1 = SessionLogger(tmp_path, "ts")
+    logger1.log_debug("original entry")
+    logger1.close()
+
+    logger2 = SessionLogger.from_existing(jsonl)
+    logger2.log_debug("resumed entry")
+    logger2.close()
+
+    debug_log = tmp_path / "debug_ts.log"
+    content = debug_log.read_text()
+    assert "original entry" in content
+    assert "resumed entry" in content
+
+
 def test_assistant_entry_has_no_rag_or_attachments(tmp_path):
     logger = SessionLogger(tmp_path, "ts")
     logger.log_exchange("msg", "resp", [_chunk(tmp_path)], [_attachment(tmp_path)])

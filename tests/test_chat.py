@@ -296,6 +296,35 @@ def test_process_does_not_log_on_abort():
 
 
 # ---------------------------------------------------------------------------
+# resumed_context injection
+# ---------------------------------------------------------------------------
+
+def test_resumed_context_injected_after_system_prompt(tmp_path):
+    session, store, _ = _make_session()
+    session.resumed_context = "prior context block"
+
+    with patch("pmca.chat.chat_completion", return_value="r") as mock_cc:
+        with patch("pmca.chat.parse_attachment_paths", return_value=[]):
+            session.process("hi")
+
+    messages = mock_cc.call_args[0][0]
+    assert messages[0]["content"] == "You are helpful."
+    assert messages[1] == {"role": "system", "content": "prior context block"}
+
+
+def test_resumed_context_not_injected_when_none(tmp_path):
+    session, store, _ = _make_session()
+    assert session.resumed_context is None
+
+    with patch("pmca.chat.chat_completion", return_value="r") as mock_cc:
+        with patch("pmca.chat.parse_attachment_paths", return_value=[]):
+            session.process("hi")
+
+    messages = mock_cc.call_args[0][0]
+    assert not any(m.get("content") == "prior context block" for m in messages)
+
+
+# ---------------------------------------------------------------------------
 # _trim_history
 # ---------------------------------------------------------------------------
 
