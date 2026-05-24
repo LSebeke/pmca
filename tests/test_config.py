@@ -210,6 +210,7 @@ def test_optional_fields_default_correctly(tmp_path):
     assert cfg.top_p is None
     assert cfg.frequency_penalty is None
     assert cfg.presence_penalty is None
+    assert cfg.startup_docs == []
 
 
 def test_optional_fields_override(tmp_path):
@@ -236,6 +237,51 @@ def test_optional_fields_override(tmp_path):
     assert cfg.top_p == pytest.approx(0.9)
     assert cfg.frequency_penalty == pytest.approx(0.1)
     assert cfg.presence_penalty == pytest.approx(0.2)
+
+
+# ---------------------------------------------------------------------------
+# startup_docs
+# ---------------------------------------------------------------------------
+
+def test_startup_docs_loads_content_from_files(tmp_path):
+    rag_file = tmp_path / "code.py"
+    rag_file.write_text("x = 1")
+    log_folder = tmp_path / "logs"
+
+    doc1 = tmp_path / "framework.md"
+    doc1.write_text("# Framework docs")
+    doc2 = tmp_path / "conventions.md"
+    doc2.write_text("# Coding conventions")
+
+    yaml_content = minimal_yaml(rag_file, log_folder) + f"startup_docs:\n  - {doc1}\n  - {doc2}\n"
+    cfg_path = write_yaml(tmp_path, "cfg.yaml", yaml_content)
+    cfg = load_config(str(cfg_path))
+
+    assert cfg.startup_docs == [(doc1, "# Framework docs"), (doc2, "# Coding conventions")]
+
+
+def test_startup_docs_raises_when_path_not_absolute(tmp_path):
+    rag_file = tmp_path / "code.py"
+    rag_file.write_text("x = 1")
+    log_folder = tmp_path / "logs"
+
+    yaml_content = minimal_yaml(rag_file, log_folder) + "startup_docs:\n  - relative/doc.md\n"
+    cfg_path = write_yaml(tmp_path, "cfg.yaml", yaml_content)
+
+    with pytest.raises(ConfigError, match="absolute"):
+        load_config(str(cfg_path))
+
+
+def test_startup_docs_raises_when_path_does_not_exist(tmp_path):
+    rag_file = tmp_path / "code.py"
+    rag_file.write_text("x = 1")
+    log_folder = tmp_path / "logs"
+
+    yaml_content = minimal_yaml(rag_file, log_folder) + "startup_docs:\n  - /nonexistent/doc.md\n"
+    cfg_path = write_yaml(tmp_path, "cfg.yaml", yaml_content)
+
+    with pytest.raises(ConfigError, match="not found"):
+        load_config(str(cfg_path))
 
 
 # ---------------------------------------------------------------------------

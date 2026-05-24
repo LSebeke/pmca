@@ -75,6 +75,9 @@ class ChatSession:
     ) -> list[dict]:
         messages: list[dict] = [{"role": "system", "content": self.config.system_prompt}]
 
+        for path, content in self.config.startup_docs:
+            messages.append({"role": "system", "content": _format_startup_doc(path, content)})
+
         if rag_chunks:
             messages.append({"role": "system", "content": _format_rag(rag_chunks)})
 
@@ -85,6 +88,10 @@ class ChatSession:
         messages.append({"role": "user", "content": user_message})
 
         return messages
+
+
+def _format_startup_doc(path: Path, content: str) -> str:
+    return f"[STARTUP_DOC]\nFile: {path}\n---\n{content}\n---"
 
 
 def _format_rag(chunks: list[Chunk]) -> str:

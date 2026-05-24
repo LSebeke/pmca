@@ -136,6 +136,53 @@ def test_process_omits_attachment_messages_when_none():
     assert not any("[CONTEXT" in m.get("content", "") for m in messages)
 
 
+def test_startup_docs_appear_after_system_prompt_before_rag():
+    doc_path = Path("/fake/framework.md")
+    cfg = _config(startup_docs=[(doc_path, "# Framework")])
+    session, store, _ = _make_session(cfg)
+    store.query.return_value = [_chunk()]
+
+    with patch("pmca.chat.chat_completion", return_value="r") as mock_cc:
+        with patch("pmca.chat.parse_attachment_paths", return_value=[]):
+            session.process("hi")
+
+    messages = mock_cc.call_args[0][0]
+    assert messages[0]["role"] == "system"
+    assert messages[0]["content"] == "You are helpful."
+    assert "[STARTUP_DOC]" in messages[1]["content"]
+    assert "/fake/framework.md" in messages[1]["content"]
+    assert "# Framework" in messages[1]["content"]
+    assert "[RAG_1]" in messages[2]["content"]
+
+
+def test_each_startup_doc_is_separate_system_message():
+    doc1 = Path("/fake/doc1.md")
+    doc2 = Path("/fake/doc2.md")
+    cfg = _config(startup_docs=[(doc1, "content one"), (doc2, "content two")])
+    session, store, _ = _make_session(cfg)
+
+    with patch("pmca.chat.chat_completion", return_value="r") as mock_cc:
+        with patch("pmca.chat.parse_attachment_paths", return_value=[]):
+            session.process("hi")
+
+    messages = mock_cc.call_args[0][0]
+    startup_messages = [m for m in messages if "[STARTUP_DOC]" in m.get("content", "")]
+    assert len(startup_messages) == 2
+    assert "content one" in startup_messages[0]["content"]
+    assert "content two" in startup_messages[1]["content"]
+
+
+def test_no_startup_doc_messages_when_startup_docs_empty():
+    session, store, _ = _make_session()
+
+    with patch("pmca.chat.chat_completion", return_value="r") as mock_cc:
+        with patch("pmca.chat.parse_attachment_paths", return_value=[]):
+            session.process("hi")
+
+    messages = mock_cc.call_args[0][0]
+    assert not any("[STARTUP_DOC]" in m.get("content", "") for m in messages)
+
+
 def test_process_message_order_system_rag_attachment_history_user():
     session, store, _ = _make_session()
     store.query.return_value = [_chunk()]
