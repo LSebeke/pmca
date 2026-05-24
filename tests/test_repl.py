@@ -195,3 +195,53 @@ def test_keyboard_interrupt_exits_loop():
     mock_prompt.prompt.side_effect = [KeyboardInterrupt()]
     with patch("pmca.repl.PromptSession", return_value=mock_prompt):
         run_repl(session, MagicMock())  # should not raise
+
+
+# ---------------------------------------------------------------------------
+# handle_command — /extract
+# ---------------------------------------------------------------------------
+
+def test_extract_missing_path_prints_error(capsys):
+    session = _session(history=[])
+    handle_command("/extract", session)
+    assert capsys.readouterr().out.strip()
+
+
+def test_extract_no_history_prints_error(capsys):
+    session = _session(history=[])
+    handle_command("/extract /tmp/out.py", session)
+    assert capsys.readouterr().out.strip()
+
+
+def test_extract_creates_parent_directories(tmp_path):
+    code = "x = 1"
+    msg = f"```python\n{code}\n```"
+    session = _session(history=[{"role": "assistant", "content": msg}])
+    out = tmp_path / "a" / "b" / "out.py"
+    handle_command(f"/extract {out}", session)
+    assert out.read_text() == code
+
+
+def test_extract_no_blocks_prints_error_and_no_file(tmp_path, capsys):
+    session = _session(history=[{"role": "assistant", "content": "no code here"}])
+    out = tmp_path / "out.py"
+    handle_command(f"/extract {out}", session)
+    assert capsys.readouterr().out.strip()
+    assert not out.exists()
+
+
+def test_extract_multiple_blocks_concatenated(tmp_path):
+    msg = "```python\na = 1\n```\nsome prose\n```python\nb = 2\n```"
+    session = _session(history=[{"role": "assistant", "content": msg}])
+    out = tmp_path / "out.py"
+    handle_command(f"/extract {out}", session)
+    assert out.read_text() == "a = 1\n\nb = 2"
+
+
+def test_extract_writes_python_block_to_file(tmp_path):
+    code = "x = 1\nprint(x)"
+    msg = f"Here you go:\n```python\n{code}\n```"
+    session = _session(history=[{"role": "assistant", "content": msg}])
+    out = tmp_path / "out.py"
+    handle_command(f"/extract {out}", session)
+    assert out.read_text() == code

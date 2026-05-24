@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import re
+from pathlib import Path
+
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import InMemoryHistory
 from prompt_toolkit.key_binding import KeyBindings
@@ -12,6 +15,7 @@ Commands:
   /set chunksize=N            Set top-k RAG retrieval count for this session
   /set history_token_budget=N Set history token budget for this session
   /rag                        Print RAG chunks retrieved for the last query
+  /extract <path>             Extract Python code blocks from last response into <path>
   /help                       Print this help message
   /exit                       End session
 
@@ -82,6 +86,10 @@ def handle_command(cmd: str, session: ChatSession) -> None:
         _handle_set(parts[1] if len(parts) > 1 else "", session)
         return
 
+    if name == "/extract":
+        _extract_python(parts[1] if len(parts) > 1 else "", session)
+        return
+
     print(f"Unknown command: {name}")
 
 
@@ -110,6 +118,28 @@ def _handle_set(arg: str, session: ChatSession) -> None:
 
     setattr(session, attr, value)
     print(f"{key} = {value}")
+
+
+def _extract_python(arg: str, session: ChatSession) -> None:
+    arg = arg.strip()
+    if not arg:
+        print("Error: usage: /extract <absolute-path>")
+        return
+
+    if not session.history:
+        print("Error: no assistant response yet.")
+        return
+
+    last = session.history[-1]["content"]
+    blocks = re.findall(r"```python\n(.*?)```", last, re.DOTALL)
+
+    if not blocks:
+        print("No Python code blocks found in last response.")
+        return
+
+    Path(arg).parent.mkdir(parents=True, exist_ok=True)
+    Path(arg).write_text("\n\n".join(b.rstrip("\n") for b in blocks))
+    print(f"Wrote {len(blocks)} block(s) to {arg}")
 
 
 def _trim_notice(n: int) -> str:

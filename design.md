@@ -99,7 +99,7 @@ class Attachment:
 ```python
 def load_config(config_name: str) -> Config:
     """
-    Searches for <config_name>.yaml in the current directory and ~/.pmca/.
+    Searches for <config_name>.yaml in the current directory and <package_dir>/configs/.
     Raises ConfigError with a descriptive message on any validation failure.
     """
 ```
@@ -325,8 +325,17 @@ def handle_command(cmd: str, session: ChatSession) -> None:
     """
     /set <param>=<value>  — update session.top_k or session.history_token_budget
     /rag                  — print session._last_rag_chunks
+    /extract <path>       — write all Python code blocks from last response to <path>
     /help                 — print command reference
     /exit                 — raise SystemExit
+    """
+
+def _extract_python(cmd: str, session: ChatSession) -> None:
+    """
+    Parse an absolute file path from cmd. Find all ```python ... ``` fenced blocks
+    in the last assistant message (session.history[-1]). Write them to the path,
+    separated by blank lines. Print an error if no argument, no history, or no
+    code blocks found.
     """
 ```
 
@@ -425,6 +434,7 @@ Config resolution:
 | `/set chunksize=N` | Set top-k RAG retrieval count for this session |
 | `/set history_token_budget=N` | Set history token budget for this session |
 | `/rag` | Print RAG chunks retrieved for the last query |
+| `/extract <path>` | Extract all Python code blocks from the last response into `<path>` (absolute path required) |
 | `/help` | Print command reference and key bindings |
 | `/exit` | End session (also: Ctrl+C) |
 
