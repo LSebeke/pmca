@@ -6,25 +6,21 @@
 
 ---
 
-## Finding 1 — HIGH: System metadata auto-injected into every request
+## Finding 1 — HIGH: System metadata auto-injected into every request ✅ RESOLVED
 
-**Location:** `src/pmca/chat.py:39, 169–177`
+**Location:** `src/pmca/chat.py:39, 169–177` (as of the review; see commit `f733e6f` for the fix)
 
-`_build_system_context()` is called once at `ChatSession.__init__` and included as a system message in **every** API call. It unconditionally transmits:
+`_build_system_context()` previously transmitted unconditionally: datetime, full OS version string (`platform.version()`), hostname (`platform.node()`), username (`getpass.getuser()`), and shell.
 
-| Field | Source | Example value |
-|---|---|---|
-| Datetime | `datetime.now()` | `2026-05-25 14:03:11 +0200` |
-| OS version | `platform.version()` | `#1-ARCH SMP PREEMPT_DYNAMIC Thu, 01 May 2025 ...` |
-| Hostname | `platform.node()` | `corp-laptop-jsmith` |
-| Username | `os.environ['USER']` / `getpass.getuser()` | `jsmith` |
-| Shell | `os.environ['SHELL']` | `/usr/bin/zsh` |
+**Resolution (`f733e6f` — Phase 22 revised):** The function now takes a `fields: list[str]` argument driven by a new config key `system_context_fields` (default: `[]`). When the list is empty — which it is unless the user explicitly opts in — **nothing is injected**. Hostname and username have been removed entirely as recognised fields; even an opt-in user cannot accidentally send them. The reduced field set is:
 
-**Why it is accidental:** There is no config knob to disable this, no opt-in prompt, and no startup message informing the user what is being sent. A user focused on keeping a session private has no way to know their username and internal hostname are in every single chat completion request body.
+| Field value | Content injected |
+|---|---|
+| `"datetime"` | `Session started: 2026-05-25 14:03:11 +0200` |
+| `"os"` | `OS: Linux` (`platform.system()` only — no version string or hostname) |
+| `"shell"` | `Shell: /usr/bin/zsh` (`$SHELL` on Unix, `%COMSPEC%` on Windows) |
 
-**Concrete scenario:** A developer at `corp-internal-infra` whose username is `jsmith` connects to an LLM provider. Both facts are transmitted in plaintext in every API call. If the provider logs request bodies, this permanently links their identity and machine to the session.
-
-**Recommendation:** Add a config field `include_session_context: false` to opt out, or print the context block at session start so the user can make an informed choice before the first API call is made.
+The sample configs document the field via a commented-out line so users are aware the option exists without enabling it by default.
 
 ---
 
@@ -91,7 +87,7 @@ When `--resume` is used, `startup_docs` content is taken verbatim from the JSONL
 
 | # | Severity | Location | Issue |
 |---|---|---|---|
-| 1 | HIGH | `chat.py:169–177` | Hostname, username, OS version auto-injected into every API call |
+| 1 | HIGH ✅ | `chat.py:169–177` | Hostname, username, OS version auto-injected into every API call |
 | 2 | HIGH | `chat.py:142–148` | RAG chunks accumulate without bound across a session |
 | 3 | MEDIUM | `store.py:54` | User queries sent to embeddings API without disclosure |
 | 4 | HIGH | `store.py:65` | Pickle deserialization of cache enables RCE |

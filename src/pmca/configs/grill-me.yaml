@@ -14,3 +14,4 @@ system_prompt: |
 top_k_chunks: 0
 log_folder: ~/.pmca/logs
 history_token_budget: 8000
+# system_context_fields: [datetime, os, shell]   # uncomment any subset to inject into every API call
