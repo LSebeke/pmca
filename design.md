@@ -75,10 +75,20 @@ class Attachment:
 
 ### 3.4 LogEntry (JSONL)
 
+Three entry types, distinguished by a mandatory `type` field:
+
 ```python
+# Written once at session start — system prompt
+{"type": "system_prompt", "content": "..."}
+
+# Written once per startup doc at session start
+{"type": "startup_doc", "path": "/abs/path/doc.md", "content": "..."}
+
+# Written twice per user turn (user then assistant)
 {
+    "type": "exchange",
     "timestamp": "2025-05-14T15:32:10Z",
-    "role": "user" | "assistant" | "system",
+    "role": "user" | "assistant",
     "content": "...",
     "rag_chunks": [                         # present on user turns only
         {"label": "...", "source": "...", "content": "..."}
@@ -89,7 +99,7 @@ class Attachment:
 }
 ```
 
-`attachments[].content` stores the verbatim file content so that a resumed session can reconstruct attachment context without re-reading the original files (which may have moved or changed).
+`attachments[].content` and `rag_chunks[].content` store verbatim content so that a resumed session can reconstruct full context without re-reading original files. The log is the authoritative source of truth for session state on resume.
 
 ---
 
@@ -246,11 +256,14 @@ class ChatSession:
     config: Config
     store: VectorStore
     unsafe: bool
-    history: list[dict]         # {"role": "user"|"assistant", "content": str}
-    top_k: int                  # mutable via /set
-    history_token_budget: int   # mutable via /set
-    _last_rag_chunks: list[Chunk]  # stored for /rag command
-    resumed_context: str | None  # [RESUMED_CONTEXT] system message body, set at resume time
+    system_prompt: str           # active system prompt (from config or log on resume)
+    startup_docs: list[tuple[Path, str]]  # active startup docs (from config or log on resume)
+    history: list[dict]          # {"role": "user"|"assistant", "content": str}
+    top_k: int                   # mutable via /set
+    history_token_budget: int    # mutable via /set
+    _last_rag_chunks: list[Chunk]   # stored for /rag command
+    session_attachments: list[Attachment]  # all attachments accumulated this session
+    session_rag_chunks: list[Chunk]        # all RAG chunks accumulated this session (deduped)
     _next_attachment_n: int      # session-global counter for CONTEXT_<n> identifiers
 
     def process(self, user_input: str) -> str:
@@ -259,8 +272,10 @@ class ChatSession:
           1. Parse and resolve attachments (passing _next_attachment_n as start_n);
              substitute identifiers in message.
              Advance _next_attachment_n by len(attachments) on success only.
+             Append new attachments to session_attachments.
           2. Trim history to fit history_token_budget; note turns dropped.
-          3. Query RAG store for top_k chunks.
+          3. Query RAG store for top_k chunks. Merge new chunks into session_rag_chunks
+             (deduplicated by (source_file, label)).
           4. Assemble message list (see Section 5).
           5. Call openai_client.chat_completion().
           6. Append user + assistant turns to self.history.
@@ -271,8 +286,9 @@ class ChatSession:
     def rotate_logger(self) -> Path:
         """
         Close the current logger, open a new one with a fresh timestamp in
-        config.log_folder, assign it to self.logger, and return the path of
-        the new JSONL file. Also resets _next_attachment_n to 1.
+        config.log_folder, write session-start entries (system_prompt, startup_docs),
+        assign it to self.logger, and return the path of the new JSONL file.
+        Also resets _next_attachment_n to 1, session_attachments to [], session_rag_chunks to [].
         """
 
     def _trim_history(self) -> int:
@@ -280,6 +296,12 @@ class ChatSession:
         Drop oldest turns (user+assistant pairs) until history fits within
         history_token_budget. Token count estimated as len(content) // 4.
         Returns number of turns dropped.
+        """
+
+    def _merge_rag_chunks(self, new_chunks: list[Chunk]) -> None:
+        """
+        Add chunks from new_chunks to session_rag_chunks that are not already present,
+        matching on (source_file, label).
         """
 ```
 
@@ -317,6 +339,17 @@ class SessionLogger:
                <log_folder>/debug_<timestamp>.log.
         """
 
+    def log_session_start(
+        self,
+        system_prompt: str,
+        startup_docs: list[tuple[Path, str]],
+    ) -> None:
+        """
+        Writes one {"type": "system_prompt", ...} entry followed by one
+        {"type": "startup_doc", ...} entry per startup doc. Called once at
+        session start (and again after /clear rotates the logger).
+        """
+
     def log_exchange(
         self,
         user_message: str,
@@ -324,7 +357,7 @@ class SessionLogger:
         rag_chunks: list[Chunk],
         attachments: list[Attachment],
     ) -> None:
-        """Appends two JSONL lines: one user entry, one assistant entry."""
+        """Appends two {"type": "exchange", ...} lines: one user entry, one assistant entry."""
 
     def log_debug(self, message: str) -> None:
         """Appends timestamped line to debug log."""
@@ -337,6 +370,7 @@ class SessionLogger:
         Open an existing session's JSONL and debug log in append mode.
         The debug log path is inferred by replacing the 'chat_' prefix with 'debug_'
         and the '.jsonl' suffix with '.log' in the same directory.
+        Does NOT write session-start entries — the log already has them.
         """
 ```
 
@@ -344,53 +378,38 @@ class SessionLogger:
 
 ### 4.9 `resume.py`
 
-**Responsibilities:** Parse a `chat_<timestamp>.jsonl` file, validate it strictly, and return the data needed to bootstrap a resumed session.
+**Responsibilities:** Parse a `chat_<timestamp>.jsonl` file, validate it strictly, and return the data needed to bootstrap a resumed session. The log is the authoritative source of truth — no `[RESUMED_CONTEXT]` wrapper is used; the reconstructed fields are injected into `ChatSession` the same way a fresh session would set them.
 
 ```python
 @dataclass
 class ResumedSession:
-    history: list[dict]             # {"role": "user"|"assistant", "content": str} pairs
-    resumed_context: str            # formatted [RESUMED_CONTEXT] system message body
-    last_assistant_message: str     # for printing at startup
-    jsonl_path: Path                # original path (for logger)
-    next_attachment_n: int          # max(N for CONTEXT_N in log) + 1; new attachments start here
+    system_prompt: str                      # from "system_prompt" log entry
+    startup_docs: list[tuple[Path, str]]    # from "startup_doc" log entries (in order)
+    history: list[dict]                     # {"role": "user"|"assistant", "content": str} pairs
+    session_attachments: list[Attachment]   # all attachments seen, unique by identifier, in order
+    session_rag_chunks: list[Chunk]         # all RAG chunks seen, deduplicated by (source_file, label)
+    last_assistant_message: str             # for printing at startup
+    jsonl_path: Path                        # original path (for logger append)
+    next_attachment_n: int                  # max(N for CONTEXT_N in log) + 1; new attachments start here
 
 def load_resume(path: Path) -> ResumedSession:
     """
     Parse the JSONL at path. Raises ResumeError with a descriptive message on:
       - File not found
       - Any line that is not valid JSON or is missing required fields (reports line numbers)
-      - Zero user/assistant turns found after parsing
+      - Zero user/assistant exchange turns found after parsing
+      - No "system_prompt" entry found
 
     On success:
-      - Builds history from all "user"/"assistant" role lines (role + content only).
-      - Collects all unique attachments (by identifier) and RAG chunks across all turns.
-      - Formats them into a single [RESUMED_CONTEXT] system message string.
-      - Returns the last assistant message for startup display.
+      - Reads system_prompt from the first "system_prompt" entry.
+      - Reads startup_docs from all "startup_doc" entries (preserving order).
+      - Builds history from all "exchange" role lines (role + content only).
+      - Collects session_attachments: unique by identifier, in first-seen order.
+      - Collects session_rag_chunks: deduplicated by (source_file, label), in first-seen order.
+      - Returns the last assistant exchange message for startup display.
       - Computes next_attachment_n as max(N for all CONTEXT_N identifiers found) + 1,
         or 1 if no attachments were present.
     """
-```
-
-The `[RESUMED_CONTEXT]` block format:
-
-```
-[RESUMED_CONTEXT]
-The following attachments and RAG chunks were present in the resumed session.
-
-[CONTEXT_1]
-File: /path/to/file.py
-Type: py
----
-<verbatim content>
----
-
-[RAG_1]
-File: /path/to/source.py
-Chunk: function `foo` (lines 1–10)
----
-<chunk content>
----
 ```
 
 ---
@@ -468,14 +487,20 @@ def main() -> None:
 Order sent to OpenAI on each turn:
 
 ```
-[system]  <config.system_prompt>
+[system]  <session.system_prompt>
 
-[system]  [RESUMED_CONTEXT]          ← only present when session was resumed
-          <all prior attachments and RAG chunks from loaded log>
+[system]  <startup_doc 1>            ← one entry per startup doc, if any
+[system]  <startup_doc 2> ...
 
-[system]  <startup_docs, if any>
+[system]  [CONTEXT_1]                ← ALL session_attachments accumulated so far
+          File: /absolute/path/to/main.py
+          Type: py
+          ---
+          <verbatim file content>
+          ---
+          [CONTEXT_2] ...
 
-[system]  [RAG_1]                    ← fresh RAG for the current turn
+[system]  [RAG_1]                    ← ALL session_rag_chunks accumulated so far
           File: /absolute/path/to/file.py
           Chunk: function `parse_config` (lines 15–32)
           ---
@@ -483,20 +508,13 @@ Order sent to OpenAI on each turn:
           ---
           [RAG_2] ...
 
-[system]  [CONTEXT_1]                ← attachments for the current turn
-          File: /absolute/path/to/main.py
-          Type: py
-          ---
-          <verbatim file content>
-          ---
-
-[user]    <message with [[filepath]] replaced by CONTEXT_1>
+[user]    <prior user message>
 [assistant] <prior response>
 [user]    ...  ← trimmed history (oldest dropped first)
 [user]    <current message>
 ```
 
-RAG and attachment system messages are injected fresh each turn; only user/assistant exchanges are stored in history. The `[RESUMED_CONTEXT]` block is injected once per session when `session.resumed_context` is set.
+All session_attachments and session_rag_chunks are injected on every turn. Only user/assistant exchanges are stored in history. There is no special `[RESUMED_CONTEXT]` block — resumed sessions use the same assembly path as live sessions.
 
 ---
 
@@ -539,16 +557,24 @@ When `--resume <path>` is provided:
 
 1. The JSONL file at `<path>` is parsed. Hard errors (exit before REPL) on:
    - File not found
-   - Zero valid user/assistant turns found
+   - Zero valid user/assistant exchange turns found
+   - No `system_prompt` entry found
    - Any malformed (non-JSON or schema-invalid) lines — print offending line numbers
-2. All prior `user`/`assistant` turns are loaded into `session.history` as `{"role": ..., "content": ...}`.
-3. All unique attachments and RAG chunks from the JSONL are collected and injected as a single `[RESUMED_CONTEXT]` system message immediately after `config.system_prompt` in `_build_messages`. This gives the model visibility into prior attachment content referenced in the resumed history.
-4. The logger appends to the original JSONL file (passed path) and to its matching debug log (same directory, filename with `chat_` → `debug_` and `.jsonl` → `.log`).
-5. At startup the REPL prints:
+2. `session.system_prompt` and `session.startup_docs` are set from the log entries.
+   - If the loaded config's `system_prompt` differs from the log's, print a warning:
+     `Warning: config system_prompt differs from log — using log version`
+   - If the loaded config's `startup_docs` differ from the log's, print a warning:
+     `Warning: config startup_docs differ from log — using log version`
+3. `session.history` is populated from all `exchange` entries.
+4. `session.session_attachments` is populated from all unique attachments across the log (unique by identifier, first-seen order).
+5. `session.session_rag_chunks` is populated from all RAG chunks across the log (deduplicated by `(source_file, label)`, first-seen order).
+6. `session._next_attachment_n` is set from `ResumedSession.next_attachment_n`.
+7. The logger appends to the original JSONL file and its matching debug log — it does NOT write new session-start entries (they are already in the log).
+8. At startup the REPL prints:
    - `Resumed N turns from <path>`
    - `[last response]` followed by the final assistant message from the log
 
-History trimming is lazy: the first `session.process()` call runs `_trim_history` as normal.
+History trimming is lazy: the first `session.process()` call runs `_trim_history` as normal. Message assembly uses the identical `_build_messages` path as a live session.
 
 ---
 
@@ -560,7 +586,7 @@ History trimming is lazy: the first `session.process()` call runs `_trim_history
 | `/set history_token_budget=N` | Set history token budget for this session |
 | `/rag` | Print RAG chunks retrieved for the last query |
 | `/extract <path>` | Extract code blocks from the last response into `<path>`; fence language inferred from extension (`.py`, `.yaml`/`.yml`, `.json`, `.toml`, `.sh`) |
-| `/clear` | Clear conversation history, last RAG chunks, and resumed context; rotate to a new log file; print new log path |
+| `/clear` | Clear conversation history, session_attachments, session_rag_chunks, and last RAG chunks; rotate to a new log file (writes fresh system_prompt + startup_doc entries); print new log path |
 | `/help` | Print command reference and key bindings |
 | `/exit` | End session (also: Ctrl+C) |
 

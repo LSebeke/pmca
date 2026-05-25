@@ -91,11 +91,17 @@ def test_full_session_writes_correct_jsonl_log(project, monkeypatch):
     jsonl_files = list(log_folder.glob("chat_*.jsonl"))
     assert len(jsonl_files) == 1, "Expected exactly one chat log file"
 
-    entries = [
+    all_entries = [
         json.loads(line)
         for line in jsonl_files[0].read_text().splitlines()
         if line.strip()
     ]
+
+    # Verify session-start entries are present
+    assert any(e.get("type") == "system_prompt" for e in all_entries)
+
+    # Extract exchange entries for the rest of the assertions
+    entries = [e for e in all_entries if e.get("type") == "exchange"]
     assert len(entries) == 2
 
     user_entry, asst_entry = entries

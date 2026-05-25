@@ -23,6 +23,16 @@ class SessionLogger:
         instance._log = open(debug_path, "a", encoding="utf-8")
         return instance
 
+    def log_session_start(
+        self,
+        system_prompt: str,
+        startup_docs: list[tuple[Path, str]],
+    ) -> None:
+        self._jsonl.write(json.dumps({"type": "system_prompt", "content": system_prompt}) + "\n")
+        for path, content in startup_docs:
+            self._jsonl.write(json.dumps({"type": "startup_doc", "path": str(path), "content": content}) + "\n")
+        self._jsonl.flush()
+
     def log_exchange(
         self,
         user_message: str,
@@ -32,6 +42,7 @@ class SessionLogger:
     ) -> None:
         now = _utcnow()
         user_entry = {
+            "type": "exchange",
             "timestamp": now,
             "role": "user",
             "content": user_message,
@@ -39,6 +50,7 @@ class SessionLogger:
             "attachments": [_attachment_dict(a) for a in attachments],
         }
         asst_entry = {
+            "type": "exchange",
             "timestamp": now,
             "role": "assistant",
             "content": assistant_message,

@@ -312,6 +312,72 @@ None needed — changes are localised.
 
 ---
 
+## Phase 21 — Persistent attachments and RAG chunks
+
+**Why:** Currently attachments and RAG chunks are injected only for the turn they appear in — the model cannot reference prior attachment content in follow-up turns. This phase makes both accumulate across turns so the full session context is always present in every API call. Resumed sessions are reconstructed entirely from the log (no `[RESUMED_CONTEXT]` special path).
+
+### Changes across modules
+
+**`logger.py`**
+- Add `log_session_start(system_prompt, startup_docs)` — writes `{"type": "system_prompt", ...}` and `{"type": "startup_doc", ...}` entries
+- `log_exchange` entries gain `{"type": "exchange", ...}` field; `rag_chunks` and `attachments` fields remain on user turns
+
+**`chat.py`**
+- Add `system_prompt: str` and `startup_docs: list[tuple[Path, str]]` fields to `ChatSession` (replacing direct reads from `config`)
+- Add `session_attachments: list[Attachment]` — accumulates across turns; reset on `/clear`
+- Add `session_rag_chunks: list[Chunk]` — accumulates across turns, deduplicated by `(source_file, label)`; reset on `/clear`
+- Remove `resumed_context: str | None`
+- Add `_merge_rag_chunks(new_chunks)` — merges into `session_rag_chunks` skipping duplicates
+- `process()`: append new attachments to `session_attachments`; merge new RAG chunks into `session_rag_chunks`
+- `_build_messages()`: inject all `session_attachments` then all `session_rag_chunks` (replacing per-turn injection and `resumed_context` block)
+- `rotate_logger()`: reset `session_attachments`, `session_rag_chunks`, `_next_attachment_n`; call `logger.log_session_start()`
+- `cli.py` bootstrap: call `logger.log_session_start()` after creating the logger
+
+**`resume.py`**
+- `ResumedSession` gains: `system_prompt`, `startup_docs`, `session_attachments`, `session_rag_chunks`; drops `resumed_context`
+- `load_resume()`: reads `system_prompt` from `{"type": "system_prompt"}` entry (error if absent); reads `startup_docs` from `{"type": "startup_doc"}` entries; reconstructs `session_attachments` and `session_rag_chunks` from all exchange entries
+
+**`cli.py`**
+- On resume: set `session.system_prompt` and `session.startup_docs` from `ResumedSession`; warn if they differ from config values
+- Set `session.session_attachments` and `session.session_rag_chunks` from `ResumedSession`
+- Logger used via `from_existing` — does NOT write session-start entries again
+
+**`repl.py`**
+- `/clear` handler: also reset `session.session_attachments` and `session.session_rag_chunks`; call `session.rotate_logger()` (which handles the rest)
+
+### Red
+
+**`logger.py`**
+- `log_session_start` writes a `system_prompt` entry followed by one `startup_doc` entry per doc
+- `log_exchange` entries have `type: "exchange"` field
+- Existing behaviour (two entries per turn, rag_chunks/attachments on user entry) is unchanged
+
+**`chat.py`**
+- After turn 1 attaches a file, `session_attachments` has that attachment; it is present in `_build_messages` output for turn 2 even when turn 2 has no attachments
+- After turn 1 retrieves RAG chunk A and turn 2 retrieves chunk B, `session_rag_chunks` has both; both appear in turn 2's API call
+- If chunk A is retrieved again in turn 3, `session_rag_chunks` still has only one copy
+- `_build_messages` order: system_prompt → startup_docs → session_attachments → session_rag_chunks → history → current user message
+- `/clear` (via `rotate_logger`) resets `session_attachments` and `session_rag_chunks` to `[]`
+- `resumed_context` field no longer exists on `ChatSession`
+
+**`resume.py`**
+- `load_resume` on a log with typed entries returns correct `system_prompt`, `startup_docs`, `session_attachments`, `session_rag_chunks`
+- `load_resume` raises `ResumeError` if no `system_prompt` entry found
+- Duplicate RAG chunks across turns are deduplicated in `session_rag_chunks`
+
+**`cli.py`**
+- On resume with differing system_prompt: warning printed, log version used
+- On resume with differing startup_docs: warning printed, log version used
+- `session.session_attachments` and `session.session_rag_chunks` initialised from `ResumedSession`
+
+### Green
+Apply all source changes listed above.
+
+### Refactor
+- None needed — changes are localised to five modules.
+
+---
+
 ## Phase 11 — Integration smoke test
 
 One end-to-end test with real files, mocked OpenAI API, and a real temp log directory:

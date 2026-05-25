@@ -200,8 +200,8 @@ def test_process_message_order_system_rag_attachment_history_user():
 
     messages = mock_cc.call_args[0][0]
     roles = [m["role"] for m in messages]
-    # system (base), system (rag), system (attachment), user (history),
-    # assistant (history), user (current)
+    # system (base), system (session_attachments), system (session_rag_chunks),
+    # user (history), assistant (history), user (current)
     assert roles == ["system", "system", "system", "user", "assistant", "user"]
 
 
@@ -241,6 +241,110 @@ def test_process_does_not_append_history_on_abort():
             session.process("hi")
 
     assert session.history == []
+
+
+# ---------------------------------------------------------------------------
+# process() — session_attachments persistence
+# ---------------------------------------------------------------------------
+
+def test_session_attachments_empty_at_start():
+    session, _, _ = _make_session()
+    assert session.session_attachments == []
+
+
+def test_session_attachments_accumulates_after_turn():
+    session, store, _ = _make_session()
+    att = _attachment("CONTEXT_1")
+
+    with patch("pmca.chat.chat_completion", return_value="r"):
+        with patch("pmca.chat.parse_attachment_paths", return_value=[att.path]):
+            with patch("pmca.chat.resolve_attachments", return_value=[att]):
+                with patch("pmca.chat.substitute_identifiers", return_value="hi"):
+                    session.process("hi")
+
+    assert session.session_attachments == [att]
+
+
+def test_session_attachments_appear_in_subsequent_turn_with_no_new_attachments():
+    session, store, _ = _make_session()
+    att = _attachment("CONTEXT_1")
+
+    with patch("pmca.chat.chat_completion", return_value="r"):
+        with patch("pmca.chat.parse_attachment_paths", return_value=[att.path]):
+            with patch("pmca.chat.resolve_attachments", return_value=[att]):
+                with patch("pmca.chat.substitute_identifiers", return_value="t1"):
+                    session.process("t1")
+
+    with patch("pmca.chat.chat_completion", return_value="r") as mock_cc:
+        with patch("pmca.chat.parse_attachment_paths", return_value=[]):
+            session.process("t2")
+
+    messages = mock_cc.call_args[0][0]
+    assert any("[CONTEXT_1]" in m.get("content", "") for m in messages)
+
+
+def test_session_attachments_not_accumulated_on_abort():
+    session, store, _ = _make_session()
+    from pmca.attachments import AttachmentAborted
+
+    with patch("pmca.chat.parse_attachment_paths", return_value=[Path("/f.py")]):
+        with patch("pmca.chat.resolve_attachments", side_effect=AttachmentAborted()):
+            session.process("hi")
+
+    assert session.session_attachments == []
+
+
+# ---------------------------------------------------------------------------
+# process() — session_rag_chunks persistence
+# ---------------------------------------------------------------------------
+
+def test_session_rag_chunks_empty_at_start():
+    session, _, _ = _make_session()
+    assert session.session_rag_chunks == []
+
+
+def test_session_rag_chunks_accumulates_after_turn():
+    session, store, _ = _make_session()
+    chunk = _chunk("fn `foo`")
+    store.query.return_value = [chunk]
+
+    with patch("pmca.chat.chat_completion", return_value="r"):
+        with patch("pmca.chat.parse_attachment_paths", return_value=[]):
+            session.process("hi")
+
+    assert chunk in session.session_rag_chunks
+
+
+def test_session_rag_chunks_appear_in_subsequent_turn():
+    session, store, _ = _make_session()
+    chunk = _chunk("fn `foo`")
+    store.query.return_value = [chunk]
+
+    with patch("pmca.chat.chat_completion", return_value="r"):
+        with patch("pmca.chat.parse_attachment_paths", return_value=[]):
+            session.process("t1")
+
+    store.query.return_value = []
+    with patch("pmca.chat.chat_completion", return_value="r") as mock_cc:
+        with patch("pmca.chat.parse_attachment_paths", return_value=[]):
+            session.process("t2")
+
+    messages = mock_cc.call_args[0][0]
+    assert any("fn `foo`" in m.get("content", "") for m in messages)
+
+
+def test_session_rag_chunks_deduplicates_by_source_and_label():
+    session, store, _ = _make_session()
+    chunk = _chunk("fn `foo`")
+    store.query.return_value = [chunk]
+
+    with patch("pmca.chat.chat_completion", return_value="r"):
+        with patch("pmca.chat.parse_attachment_paths", return_value=[]):
+            session.process("t1")
+        with patch("pmca.chat.parse_attachment_paths", return_value=[]):
+            session.process("t2")
+
+    assert session.session_rag_chunks.count(chunk) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -339,35 +443,6 @@ def test_process_does_not_log_on_abort():
 
 
 # ---------------------------------------------------------------------------
-# resumed_context injection
-# ---------------------------------------------------------------------------
-
-def test_resumed_context_injected_after_system_prompt(tmp_path):
-    session, store, _ = _make_session()
-    session.resumed_context = "prior context block"
-
-    with patch("pmca.chat.chat_completion", return_value="r") as mock_cc:
-        with patch("pmca.chat.parse_attachment_paths", return_value=[]):
-            session.process("hi")
-
-    messages = mock_cc.call_args[0][0]
-    assert messages[0]["content"] == "You are helpful."
-    assert messages[1] == {"role": "system", "content": "prior context block"}
-
-
-def test_resumed_context_not_injected_when_none(tmp_path):
-    session, store, _ = _make_session()
-    assert session.resumed_context is None
-
-    with patch("pmca.chat.chat_completion", return_value="r") as mock_cc:
-        with patch("pmca.chat.parse_attachment_paths", return_value=[]):
-            session.process("hi")
-
-    messages = mock_cc.call_args[0][0]
-    assert not any(m.get("content") == "prior context block" for m in messages)
-
-
-# ---------------------------------------------------------------------------
 # _trim_history
 # ---------------------------------------------------------------------------
 
@@ -447,6 +522,37 @@ def test_rotate_logger_returns_new_jsonl_path():
             mock_dt.now.return_value.strftime.return_value = "2026-05-24_12-00-02"
             result = session.rotate_logger()
     assert result == Path("/tmp/logs/chat_2026-05-24_12-00-02.jsonl")
+
+
+def test_rotate_logger_resets_session_attachments():
+    session, _, _ = _make_session()
+    session.session_attachments = [_attachment("CONTEXT_1")]
+    with patch("pmca.chat.SessionLogger"):
+        with patch("pmca.chat.datetime") as mock_dt:
+            mock_dt.now.return_value.strftime.return_value = "2026-01-01_00-00-00"
+            session.rotate_logger()
+    assert session.session_attachments == []
+
+
+def test_rotate_logger_resets_session_rag_chunks():
+    session, _, _ = _make_session()
+    session.session_rag_chunks = [_chunk()]
+    with patch("pmca.chat.SessionLogger"):
+        with patch("pmca.chat.datetime") as mock_dt:
+            mock_dt.now.return_value.strftime.return_value = "2026-01-01_00-00-00"
+            session.rotate_logger()
+    assert session.session_rag_chunks == []
+
+
+def test_rotate_logger_calls_log_session_start_on_new_logger():
+    session, _, _ = _make_session()
+    with patch("pmca.chat.SessionLogger") as MockLogger:
+        with patch("pmca.chat.datetime") as mock_dt:
+            mock_dt.now.return_value.strftime.return_value = "2026-01-01_00-00-01"
+            session.rotate_logger()
+    MockLogger.return_value.log_session_start.assert_called_once_with(
+        session.config.system_prompt, session.config.startup_docs
+    )
 
 
 def test_trim_history_returns_turned_dropped_in_process():

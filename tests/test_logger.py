@@ -154,6 +154,53 @@ def test_entries_have_timestamp_field(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# log_session_start
+# ---------------------------------------------------------------------------
+
+def test_log_session_start_writes_system_prompt_entry(tmp_path):
+    logger = SessionLogger(tmp_path, "ts")
+    logger.log_session_start("You are a pirate.", [])
+    logger.close()
+
+    lines = _read_jsonl(tmp_path / "chat_ts.jsonl")
+    assert len(lines) == 1
+    entry = lines[0]
+    assert entry["type"] == "system_prompt"
+    assert entry["content"] == "You are a pirate."
+
+
+def test_log_session_start_writes_startup_doc_entries(tmp_path):
+    logger = SessionLogger(tmp_path, "ts")
+    logger.log_session_start("prompt", [(Path("/docs/a.md"), "content a"), (Path("/docs/b.md"), "content b")])
+    logger.close()
+
+    lines = _read_jsonl(tmp_path / "chat_ts.jsonl")
+    assert len(lines) == 3
+    assert lines[0]["type"] == "system_prompt"
+    assert lines[1] == {"type": "startup_doc", "path": "/docs/a.md", "content": "content a"}
+    assert lines[2] == {"type": "startup_doc", "path": "/docs/b.md", "content": "content b"}
+
+
+def test_log_session_start_no_startup_docs_writes_one_entry(tmp_path):
+    logger = SessionLogger(tmp_path, "ts")
+    logger.log_session_start("prompt", [])
+    logger.close()
+
+    lines = _read_jsonl(tmp_path / "chat_ts.jsonl")
+    assert len(lines) == 1
+
+
+def test_log_exchange_entries_have_type_exchange(tmp_path):
+    logger = SessionLogger(tmp_path, "ts")
+    logger.log_exchange("hello", "hi", [], [])
+    logger.close()
+
+    user, asst = _read_jsonl(tmp_path / "chat_ts.jsonl")
+    assert user["type"] == "exchange"
+    assert asst["type"] == "exchange"
+
+
+# ---------------------------------------------------------------------------
 # log_debug
 # ---------------------------------------------------------------------------
 

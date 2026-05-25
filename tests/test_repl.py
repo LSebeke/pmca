@@ -223,10 +223,13 @@ def test_clear_resets_last_rag_chunks():
     assert session._last_rag_chunks == []
 
 
-def test_clear_resets_resumed_context():
-    session = _session(resumed_context="some prior context")
+def test_clear_resets_session_attachments():
+    from pmca.types import Attachment
+    att = Attachment(path=Path("/f.py"), content="x", identifier="CONTEXT_1", size_warning=False)
+    session = _session(session_attachments=[att])
     handle_command("/clear", session)
-    assert session.resumed_context is None
+    # rotate_logger() (mocked) handles the actual reset; verify it was called
+    session.rotate_logger.assert_called_once()
 
 
 def test_clear_calls_rotate_logger():

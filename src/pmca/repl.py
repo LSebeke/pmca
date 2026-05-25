@@ -93,7 +93,6 @@ def handle_command(cmd: str, session: ChatSession) -> None:
     if name == "/clear":
         session.history = []
         session._last_rag_chunks = []
-        session.resumed_context = None
         new_path = session.rotate_logger()
         print(f"Conversation history cleared. New session: {new_path}")
         return

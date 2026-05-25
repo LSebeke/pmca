@@ -23,12 +23,15 @@ class ChatSession:
         self.store = store
         self.logger = logger
         self.unsafe = unsafe
+        self.system_prompt: str = config.system_prompt
+        self.startup_docs: list[tuple] = list(getattr(config, "startup_docs", []))
         self.history: list[dict] = []
         self.top_k: int = config.top_k_chunks
         self.history_token_budget: int = config.history_token_budget
         self._last_rag_chunks: list[Chunk] = []
-        self.resumed_context: str | None = None
         self._next_attachment_n: int = 1
+        self.session_attachments: list[Attachment] = []
+        self.session_rag_chunks: list[Chunk] = []
 
     def process(self, user_input: str) -> tuple[str | None, int]:
         # 1. Attachments
@@ -40,6 +43,7 @@ class ChatSession:
             return None, 0
 
         self._next_attachment_n += len(attachments)
+        self.session_attachments.extend(attachments)
         message = substitute_identifiers(user_input, attachments)
 
         # 2. Trim history
@@ -48,9 +52,10 @@ class ChatSession:
         # 3. RAG
         rag_chunks = self.store.query(user_input, self.top_k)
         self._last_rag_chunks = rag_chunks
+        self._merge_rag_chunks(rag_chunks)
 
         # 4. Assemble and call
-        messages = self._build_messages(message, rag_chunks, attachments)
+        messages = self._build_messages(message, attachments)
         response = chat_completion(messages, self.config)
 
         # 5. Update history and log
@@ -64,7 +69,10 @@ class ChatSession:
         self.logger.close()
         timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         self.logger = SessionLogger(self.config.log_folder, timestamp)
+        self.logger.log_session_start(self.system_prompt, self.startup_docs)
         self._next_attachment_n = 1
+        self.session_attachments = []
+        self.session_rag_chunks = []
         return self.config.log_folder / f"chat_{timestamp}.jsonl"
 
     def _trim_history(self) -> int:
@@ -81,27 +89,31 @@ class ChatSession:
     def _build_messages(
         self,
         user_message: str,
-        rag_chunks: list[Chunk],
-        attachments: list[Attachment],
+        turn_attachments: list[Attachment],
     ) -> list[dict]:
-        messages: list[dict] = [{"role": "system", "content": self.config.system_prompt}]
+        messages: list[dict] = [{"role": "system", "content": self.system_prompt}]
 
-        if self.resumed_context:
-            messages.append({"role": "system", "content": self.resumed_context})
-
-        for path, content in self.config.startup_docs:
+        for path, content in self.startup_docs:
             messages.append({"role": "system", "content": _format_startup_doc(path, content)})
 
-        if rag_chunks:
-            messages.append({"role": "system", "content": _format_rag(rag_chunks)})
-
-        for att in attachments:
+        for att in self.session_attachments:
             messages.append({"role": "system", "content": _format_attachment(att)})
+
+        if self.session_rag_chunks:
+            messages.append({"role": "system", "content": _format_rag(self.session_rag_chunks)})
 
         messages.extend(self.history)
         messages.append({"role": "user", "content": user_message})
 
         return messages
+
+    def _merge_rag_chunks(self, new_chunks: list[Chunk]) -> None:
+        seen = {(c.source_file, c.label) for c in self.session_rag_chunks}
+        for chunk in new_chunks:
+            key = (chunk.source_file, chunk.label)
+            if key not in seen:
+                self.session_rag_chunks.append(chunk)
+                seen.add(key)
 
 
 def _format_startup_doc(path: Path, content: str) -> str:

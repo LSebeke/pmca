@@ -4,6 +4,8 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
+from pmca.types import Attachment, Chunk
+
 
 class ResumeError(Exception):
     pass
@@ -11,8 +13,11 @@ class ResumeError(Exception):
 
 @dataclass
 class ResumedSession:
+    system_prompt: str
+    startup_docs: list[tuple[Path, str]]
     history: list[dict]
-    resumed_context: str
+    session_attachments: list[Attachment]
+    session_rag_chunks: list[Chunk]
     last_assistant_message: str
     jsonl_path: Path
     next_attachment_n: int
@@ -39,9 +44,23 @@ def load_resume(path: Path) -> ResumedSession:
         nums = ", ".join(f"line {n}" for n in bad_lines)
         raise ResumeError(f"Malformed JSON in {path}: {nums}")
 
+    system_prompt_entries = [e for e in entries if e.get("type") == "system_prompt"]
+    if not system_prompt_entries:
+        raise ResumeError(f"No system_prompt entry found in {path}")
+
+    system_prompt = system_prompt_entries[0]["content"]
+
+    startup_docs = [
+        (Path(e["path"]), e["content"])
+        for e in entries
+        if e.get("type") == "startup_doc"
+    ]
+
+    exchange_entries = [e for e in entries if e.get("type") == "exchange"]
+
     history = [
         {"role": e["role"], "content": e["content"]}
-        for e in entries
+        for e in exchange_entries
         if e.get("role") in ("user", "assistant")
     ]
 
@@ -49,58 +68,68 @@ def load_resume(path: Path) -> ResumedSession:
         raise ResumeError(f"No valid user/assistant turns found in {path}")
 
     last_assistant = next(
-        (e["content"] for e in reversed(entries) if e.get("role") == "assistant"),
+        (e["content"] for e in reversed(exchange_entries) if e.get("role") == "assistant"),
         "",
     )
 
-    resumed_context = _build_resumed_context(entries)
-    next_attachment_n = _compute_next_attachment_n(entries)
+    session_attachments = _collect_attachments(exchange_entries)
+    session_rag_chunks = _collect_rag_chunks(exchange_entries)
+    next_attachment_n = _compute_next_attachment_n(exchange_entries)
 
     return ResumedSession(
+        system_prompt=system_prompt,
+        startup_docs=startup_docs,
         history=history,
-        resumed_context=resumed_context,
+        session_attachments=session_attachments,
+        session_rag_chunks=session_rag_chunks,
         last_assistant_message=last_assistant,
         jsonl_path=path,
         next_attachment_n=next_attachment_n,
     )
 
 
-def _build_resumed_context(entries: list[dict]) -> str:
-    seen_identifiers: set[str] = set()
-    att_blocks: list[str] = []
-    rag_blocks: list[str] = []
-
-    for entry in entries:
+def _collect_attachments(exchange_entries: list[dict]) -> list[Attachment]:
+    seen: set[str] = set()
+    result: list[Attachment] = []
+    for entry in exchange_entries:
         if entry.get("role") != "user":
             continue
-
         for att in entry.get("attachments", []):
             ident = att.get("identifier", "")
-            if ident in seen_identifiers:
+            if ident in seen:
                 continue
-            seen_identifiers.add(ident)
-            suffix = Path(att.get("path", "")).suffix.lstrip(".")
-            att_blocks.append(
-                f"[{ident}]\nFile: {att.get('path', '')}\nType: {suffix}\n---\n{att.get('content', '')}\n---"
-            )
-
-        for chunk in entry.get("rag_chunks", []):
-            rag_blocks.append(
-                f"[RAG]\nFile: {chunk.get('source', '')}\nChunk: {chunk.get('label', '')}\n---\n{chunk.get('content', '')}\n---"
-            )
-
-    if not att_blocks and not rag_blocks:
-        return ""
-
-    parts = ["[RESUMED_CONTEXT]", "The following attachments and RAG chunks were present in the resumed session."]
-    parts.extend(att_blocks)
-    parts.extend(rag_blocks)
-    return "\n\n".join(parts)
+            seen.add(ident)
+            result.append(Attachment(
+                path=Path(att["path"]),
+                content=att["content"],
+                identifier=ident,
+                size_warning=att.get("size_warning", False),
+            ))
+    return result
 
 
-def _compute_next_attachment_n(entries: list[dict]) -> int:
+def _collect_rag_chunks(exchange_entries: list[dict]) -> list[Chunk]:
+    seen: set[tuple[str, str]] = set()
+    result: list[Chunk] = []
+    for entry in exchange_entries:
+        if entry.get("role") != "user":
+            continue
+        for c in entry.get("rag_chunks", []):
+            key = (c.get("source", ""), c.get("label", ""))
+            if key in seen:
+                continue
+            seen.add(key)
+            result.append(Chunk(
+                content=c["content"],
+                source_file=Path(c["source"]),
+                label=c["label"],
+            ))
+    return result
+
+
+def _compute_next_attachment_n(exchange_entries: list[dict]) -> int:
     max_n = 0
-    for entry in entries:
+    for entry in exchange_entries:
         for att in entry.get("attachments", []):
             ident = att.get("identifier", "")
             if ident.startswith("CONTEXT_"):

@@ -48,6 +48,7 @@ def main() -> None:
     else:
         timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         logger = SessionLogger(config.log_folder, timestamp)
+        logger.log_session_start(config.system_prompt, config.startup_docs)
 
     try:
         store = VectorStore()
@@ -56,8 +57,15 @@ def main() -> None:
         session = ChatSession(config=config, store=store, logger=logger, unsafe=args.unsafe)
 
         if resumed:
+            if resumed.system_prompt != config.system_prompt:
+                print(f"Warning: config system_prompt differs from log — using log version")
+            if resumed.startup_docs != list(config.startup_docs):
+                print(f"Warning: config startup_docs differ from log — using log version")
+            session.system_prompt = resumed.system_prompt
+            session.startup_docs = resumed.startup_docs
             session.history = resumed.history
-            session.resumed_context = resumed.resumed_context or None
+            session.session_attachments = resumed.session_attachments
+            session.session_rag_chunks = resumed.session_rag_chunks
             session._next_attachment_n = resumed.next_attachment_n
             turn_count = len(resumed.history) // 2
             print(f"Resumed {turn_count} turn(s) from {resumed.jsonl_path}")

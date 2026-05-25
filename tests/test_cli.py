@@ -154,8 +154,9 @@ def test_missing_api_key_prints_to_stderr(config_file, capsys):
 def resume_log(tmp_path):
     p = tmp_path / "chat_2025-01-01_00-00-00.jsonl"
     p.write_text(
-        json.dumps({"timestamp": "t", "role": "user", "content": "old q", "rag_chunks": [], "attachments": []}) + "\n"
-        + json.dumps({"timestamp": "t", "role": "assistant", "content": "old answer"}) + "\n"
+        json.dumps({"type": "system_prompt", "content": "You are helpful."}) + "\n"
+        + json.dumps({"type": "exchange", "timestamp": "t", "role": "user", "content": "old q", "rag_chunks": [], "attachments": []}) + "\n"
+        + json.dumps({"type": "exchange", "timestamp": "t", "role": "assistant", "content": "old answer"}) + "\n"
     )
     return p
 
@@ -173,15 +174,15 @@ def test_resume_flag_loads_history_into_session(config_file, resume_log):
     ]
 
 
-def test_resume_flag_sets_resumed_context(config_file, resume_log):
+def test_resume_flag_sets_session_attachments_and_rag_chunks(config_file, resume_log):
     with patch("pmca.cli.VectorStore"):
         with patch("pmca.cli.run_repl"):
             with patch("pmca.cli.ChatSession") as MockSession:
                 _run(["pmca", str(config_file), "--resume", str(resume_log)])
 
     session = MockSession.return_value
-    # empty context (no attachments/rag in fixture) — just verify attribute was set
-    assert hasattr(session, "resumed_context")
+    assert session.session_attachments == []
+    assert session.session_rag_chunks == []
 
 
 def test_resume_flag_uses_from_existing_logger(config_file, resume_log):
@@ -190,7 +191,14 @@ def test_resume_flag_uses_from_existing_logger(config_file, resume_log):
             with patch("pmca.cli.SessionLogger") as MockLogger:
                 with patch("pmca.cli.load_resume") as mock_lr:
                     mock_lr.return_value = ResumedSession(
-                        history=[], resumed_context="", last_assistant_message="hi", jsonl_path=resume_log, next_attachment_n=1
+                        system_prompt="You are helpful.",
+                        startup_docs=[],
+                        history=[],
+                        session_attachments=[],
+                        session_rag_chunks=[],
+                        last_assistant_message="hi",
+                        jsonl_path=resume_log,
+                        next_attachment_n=1,
                     )
                     _run(["pmca", str(config_file), "--resume", str(resume_log)])
 
@@ -204,7 +212,7 @@ def test_resume_prints_startup_summary(config_file, resume_log, capsys):
 
     out = capsys.readouterr().out
     assert "Resumed" in out
-    assert "2" in out  # 2 turns
+    assert "1" in out  # 1 turn
 
 
 def test_resume_prints_last_assistant_message(config_file, resume_log, capsys):
@@ -215,6 +223,31 @@ def test_resume_prints_last_assistant_message(config_file, resume_log, capsys):
     out = capsys.readouterr().out
     assert "old answer" in out
     assert "[last response]" in out
+
+
+def test_log_session_start_called_on_fresh_start(config_file):
+    with patch("pmca.cli.VectorStore"):
+        with patch("pmca.cli.run_repl"):
+            with patch("pmca.cli.SessionLogger") as MockLogger:
+                _run(["pmca", str(config_file)])
+
+    MockLogger.return_value.log_session_start.assert_called_once()
+
+
+def test_resume_warns_if_system_prompt_differs(config_file, tmp_path, capsys):
+    log = tmp_path / "chat_diff.jsonl"
+    log.write_text(
+        json.dumps({"type": "system_prompt", "content": "DIFFERENT PROMPT"}) + "\n"
+        + json.dumps({"type": "exchange", "timestamp": "t", "role": "user", "content": "q", "rag_chunks": [], "attachments": []}) + "\n"
+        + json.dumps({"type": "exchange", "timestamp": "t", "role": "assistant", "content": "a"}) + "\n"
+    )
+    with patch("pmca.cli.VectorStore"):
+        with patch("pmca.cli.run_repl"):
+            _run(["pmca", str(config_file), "--resume", str(log)])
+
+    out = capsys.readouterr().out
+    assert "Warning" in out
+    assert "system_prompt" in out
 
 
 def test_resume_exits_on_missing_file(config_file, tmp_path, capsys):

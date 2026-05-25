@@ -17,11 +17,12 @@ def _write_jsonl(path: Path, entries: list[dict]) -> None:
 
 
 def _minimal_log(tmp_path: Path) -> Path:
-    """One user turn + one assistant turn — the minimum valid log."""
+    """Minimum valid log: system_prompt + one user/assistant exchange."""
     p = tmp_path / "chat_2025-01-01_00-00-00.jsonl"
     _write_jsonl(p, [
-        {"timestamp": "t", "role": "user", "content": "hello", "rag_chunks": [], "attachments": []},
-        {"timestamp": "t", "role": "assistant", "content": "hi there"},
+        {"type": "system_prompt", "content": "You are helpful."},
+        {"type": "exchange", "timestamp": "t", "role": "user", "content": "hello", "rag_chunks": [], "attachments": []},
+        {"type": "exchange", "timestamp": "t", "role": "assistant", "content": "hi there"},
     ])
     return p
 
@@ -45,23 +46,67 @@ def test_load_resume_raises_on_malformed_json(tmp_path):
 def test_load_resume_reports_all_malformed_line_numbers(tmp_path):
     p = tmp_path / "chat_ts.jsonl"
     p.write_text(
-        json.dumps({"timestamp": "t", "role": "user", "content": "hi", "rag_chunks": [], "attachments": []}) + "\n"
+        json.dumps({"type": "system_prompt", "content": "sp"}) + "\n"
         + "bad line\n"
-        + json.dumps({"timestamp": "t", "role": "assistant", "content": "reply"}) + "\n"
+        + json.dumps({"type": "exchange", "timestamp": "t", "role": "user", "content": "hi", "rag_chunks": [], "attachments": []}) + "\n"
+        + json.dumps({"type": "exchange", "timestamp": "t", "role": "assistant", "content": "reply"}) + "\n"
         + "another bad\n"
     )
     with pytest.raises(ResumeError) as exc_info:
         load_resume(p)
     msg = str(exc_info.value)
     assert "line 2" in msg
-    assert "line 4" in msg
+    assert "line 5" in msg
 
 
 def test_load_resume_raises_on_zero_valid_turns(tmp_path):
     p = tmp_path / "chat_ts.jsonl"
-    _write_jsonl(p, [{"timestamp": "t", "role": "system", "content": "ignore me"}])
+    _write_jsonl(p, [{"type": "system_prompt", "content": "sp"}])
     with pytest.raises(ResumeError, match="(?i)no.*turn"):
         load_resume(p)
+
+
+def test_load_resume_raises_if_no_system_prompt_entry(tmp_path):
+    p = tmp_path / "chat_ts.jsonl"
+    _write_jsonl(p, [
+        {"type": "exchange", "timestamp": "t", "role": "user", "content": "hi", "rag_chunks": [], "attachments": []},
+        {"type": "exchange", "timestamp": "t", "role": "assistant", "content": "ok"},
+    ])
+    with pytest.raises(ResumeError, match="(?i)system.?prompt"):
+        load_resume(p)
+
+
+# ---------------------------------------------------------------------------
+# system_prompt
+# ---------------------------------------------------------------------------
+
+def test_load_resume_returns_system_prompt(tmp_path):
+    p = _minimal_log(tmp_path)
+    result = load_resume(p)
+    assert result.system_prompt == "You are helpful."
+
+
+# ---------------------------------------------------------------------------
+# startup_docs
+# ---------------------------------------------------------------------------
+
+def test_load_resume_returns_startup_docs(tmp_path):
+    p = tmp_path / "chat_ts.jsonl"
+    _write_jsonl(p, [
+        {"type": "system_prompt", "content": "sp"},
+        {"type": "startup_doc", "path": "/docs/a.md", "content": "# A"},
+        {"type": "startup_doc", "path": "/docs/b.md", "content": "# B"},
+        {"type": "exchange", "timestamp": "t", "role": "user", "content": "hi", "rag_chunks": [], "attachments": []},
+        {"type": "exchange", "timestamp": "t", "role": "assistant", "content": "ok"},
+    ])
+    result = load_resume(p)
+    assert result.startup_docs == [(Path("/docs/a.md"), "# A"), (Path("/docs/b.md"), "# B")]
+
+
+def test_load_resume_returns_empty_startup_docs_when_none(tmp_path):
+    p = _minimal_log(tmp_path)
+    result = load_resume(p)
+    assert result.startup_docs == []
 
 
 # ---------------------------------------------------------------------------
@@ -80,21 +125,23 @@ def test_load_resume_returns_history_with_role_and_content(tmp_path):
 def test_load_resume_preserves_turn_order(tmp_path):
     p = tmp_path / "chat_ts.jsonl"
     _write_jsonl(p, [
-        {"timestamp": "t", "role": "user", "content": "q1", "rag_chunks": [], "attachments": []},
-        {"timestamp": "t", "role": "assistant", "content": "a1"},
-        {"timestamp": "t", "role": "user", "content": "q2", "rag_chunks": [], "attachments": []},
-        {"timestamp": "t", "role": "assistant", "content": "a2"},
+        {"type": "system_prompt", "content": "sp"},
+        {"type": "exchange", "timestamp": "t", "role": "user", "content": "q1", "rag_chunks": [], "attachments": []},
+        {"type": "exchange", "timestamp": "t", "role": "assistant", "content": "a1"},
+        {"type": "exchange", "timestamp": "t", "role": "user", "content": "q2", "rag_chunks": [], "attachments": []},
+        {"type": "exchange", "timestamp": "t", "role": "assistant", "content": "a2"},
     ])
     result = load_resume(p)
     assert [m["content"] for m in result.history] == ["q1", "a1", "q2", "a2"]
 
 
-def test_load_resume_skips_non_user_assistant_roles(tmp_path):
+def test_load_resume_skips_non_exchange_entries_in_history(tmp_path):
     p = tmp_path / "chat_ts.jsonl"
     _write_jsonl(p, [
-        {"timestamp": "t", "role": "system", "content": "sys"},
-        {"timestamp": "t", "role": "user", "content": "hi", "rag_chunks": [], "attachments": []},
-        {"timestamp": "t", "role": "assistant", "content": "hello"},
+        {"type": "system_prompt", "content": "sp"},
+        {"type": "startup_doc", "path": "/d.md", "content": "doc"},
+        {"type": "exchange", "timestamp": "t", "role": "user", "content": "hi", "rag_chunks": [], "attachments": []},
+        {"type": "exchange", "timestamp": "t", "role": "assistant", "content": "hello"},
     ])
     result = load_resume(p)
     assert len(result.history) == 2
@@ -108,75 +155,105 @@ def test_load_resume_skips_non_user_assistant_roles(tmp_path):
 def test_load_resume_returns_last_assistant_message(tmp_path):
     p = tmp_path / "chat_ts.jsonl"
     _write_jsonl(p, [
-        {"timestamp": "t", "role": "user", "content": "q1", "rag_chunks": [], "attachments": []},
-        {"timestamp": "t", "role": "assistant", "content": "first answer"},
-        {"timestamp": "t", "role": "user", "content": "q2", "rag_chunks": [], "attachments": []},
-        {"timestamp": "t", "role": "assistant", "content": "final answer"},
+        {"type": "system_prompt", "content": "sp"},
+        {"type": "exchange", "timestamp": "t", "role": "user", "content": "q1", "rag_chunks": [], "attachments": []},
+        {"type": "exchange", "timestamp": "t", "role": "assistant", "content": "first answer"},
+        {"type": "exchange", "timestamp": "t", "role": "user", "content": "q2", "rag_chunks": [], "attachments": []},
+        {"type": "exchange", "timestamp": "t", "role": "assistant", "content": "final answer"},
     ])
     result = load_resume(p)
     assert result.last_assistant_message == "final answer"
 
 
 # ---------------------------------------------------------------------------
-# resumed_context — attachments
+# session_attachments
 # ---------------------------------------------------------------------------
 
-def test_load_resume_includes_attachment_in_resumed_context(tmp_path):
+def test_load_resume_returns_session_attachments(tmp_path):
     p = tmp_path / "chat_ts.jsonl"
     _write_jsonl(p, [
+        {"type": "system_prompt", "content": "sp"},
         {
-            "timestamp": "t", "role": "user", "content": "see CONTEXT_1",
+            "type": "exchange", "timestamp": "t", "role": "user", "content": "see CONTEXT_1",
             "rag_chunks": [],
             "attachments": [{"identifier": "CONTEXT_1", "path": "/src/foo.py", "content": "def foo(): pass", "size_warning": False}],
         },
-        {"timestamp": "t", "role": "assistant", "content": "ok"},
+        {"type": "exchange", "timestamp": "t", "role": "assistant", "content": "ok"},
     ])
     result = load_resume(p)
-    assert "[RESUMED_CONTEXT]" in result.resumed_context
-    assert "CONTEXT_1" in result.resumed_context
-    assert "def foo(): pass" in result.resumed_context
+    assert len(result.session_attachments) == 1
+    att = result.session_attachments[0]
+    assert att.identifier == "CONTEXT_1"
+    assert att.path == Path("/src/foo.py")
+    assert att.content == "def foo(): pass"
+    assert att.size_warning is False
 
 
-def test_load_resume_deduplicates_attachments_by_identifier(tmp_path):
+def test_load_resume_deduplicates_session_attachments_by_identifier(tmp_path):
     p = tmp_path / "chat_ts.jsonl"
     att = {"identifier": "CONTEXT_1", "path": "/src/foo.py", "content": "x = 1", "size_warning": False}
     _write_jsonl(p, [
-        {"timestamp": "t", "role": "user", "content": "turn1", "rag_chunks": [], "attachments": [att]},
-        {"timestamp": "t", "role": "assistant", "content": "r1"},
-        {"timestamp": "t", "role": "user", "content": "turn2", "rag_chunks": [], "attachments": [att]},
-        {"timestamp": "t", "role": "assistant", "content": "r2"},
+        {"type": "system_prompt", "content": "sp"},
+        {"type": "exchange", "timestamp": "t", "role": "user", "content": "t1", "rag_chunks": [], "attachments": [att]},
+        {"type": "exchange", "timestamp": "t", "role": "assistant", "content": "r1"},
+        {"type": "exchange", "timestamp": "t", "role": "user", "content": "t2", "rag_chunks": [], "attachments": [att]},
+        {"type": "exchange", "timestamp": "t", "role": "assistant", "content": "r2"},
     ])
     result = load_resume(p)
-    assert result.resumed_context.count("CONTEXT_1") == 1
+    assert len(result.session_attachments) == 1
+
+
+def test_load_resume_session_attachments_empty_when_none(tmp_path):
+    p = _minimal_log(tmp_path)
+    result = load_resume(p)
+    assert result.session_attachments == []
 
 
 # ---------------------------------------------------------------------------
-# resumed_context — RAG chunks
+# session_rag_chunks
 # ---------------------------------------------------------------------------
 
-def test_load_resume_includes_rag_chunk_in_resumed_context(tmp_path):
+def test_load_resume_returns_session_rag_chunks(tmp_path):
     p = tmp_path / "chat_ts.jsonl"
     _write_jsonl(p, [
+        {"type": "system_prompt", "content": "sp"},
         {
-            "timestamp": "t", "role": "user", "content": "hi",
+            "type": "exchange", "timestamp": "t", "role": "user", "content": "hi",
             "rag_chunks": [{"label": "fn `foo`", "source": "/src/a.py", "content": "def foo(): pass"}],
             "attachments": [],
         },
-        {"timestamp": "t", "role": "assistant", "content": "ok"},
+        {"type": "exchange", "timestamp": "t", "role": "assistant", "content": "ok"},
     ])
     result = load_resume(p)
-    assert "fn `foo`" in result.resumed_context
-    assert "def foo(): pass" in result.resumed_context
+    assert len(result.session_rag_chunks) == 1
+    chunk = result.session_rag_chunks[0]
+    assert chunk.label == "fn `foo`"
+    assert chunk.source_file == Path("/src/a.py")
+    assert chunk.content == "def foo(): pass"
 
 
-def test_empty_resumed_context_when_no_attachments_or_rag(tmp_path):
+def test_load_resume_deduplicates_session_rag_chunks(tmp_path):
+    p = tmp_path / "chat_ts.jsonl"
+    rag = {"label": "fn `foo`", "source": "/src/a.py", "content": "def foo(): pass"}
+    _write_jsonl(p, [
+        {"type": "system_prompt", "content": "sp"},
+        {"type": "exchange", "timestamp": "t", "role": "user", "content": "t1", "rag_chunks": [rag], "attachments": []},
+        {"type": "exchange", "timestamp": "t", "role": "assistant", "content": "r1"},
+        {"type": "exchange", "timestamp": "t", "role": "user", "content": "t2", "rag_chunks": [rag], "attachments": []},
+        {"type": "exchange", "timestamp": "t", "role": "assistant", "content": "r2"},
+    ])
+    result = load_resume(p)
+    assert len(result.session_rag_chunks) == 1
+
+
+def test_load_resume_session_rag_chunks_empty_when_none(tmp_path):
     p = _minimal_log(tmp_path)
     result = load_resume(p)
-    assert result.resumed_context == ""
+    assert result.session_rag_chunks == []
 
 
 # ---------------------------------------------------------------------------
-# jsonl_path
+# jsonl_path and next_attachment_n
 # ---------------------------------------------------------------------------
 
 def test_load_resume_returns_jsonl_path(tmp_path):
@@ -185,22 +262,19 @@ def test_load_resume_returns_jsonl_path(tmp_path):
     assert result.jsonl_path == p
 
 
-# ---------------------------------------------------------------------------
-# next_attachment_n
-# ---------------------------------------------------------------------------
-
 def test_load_resume_next_attachment_n_continues_from_max(tmp_path):
     p = tmp_path / "chat_ts.jsonl"
     _write_jsonl(p, [
+        {"type": "system_prompt", "content": "sp"},
         {
-            "timestamp": "t", "role": "user", "content": "hi",
+            "type": "exchange", "timestamp": "t", "role": "user", "content": "hi",
             "rag_chunks": [],
             "attachments": [
                 {"identifier": "CONTEXT_1", "path": "/a.py", "content": "x", "size_warning": False},
                 {"identifier": "CONTEXT_2", "path": "/b.py", "content": "y", "size_warning": False},
             ],
         },
-        {"timestamp": "t", "role": "assistant", "content": "ok"},
+        {"type": "exchange", "timestamp": "t", "role": "assistant", "content": "ok"},
     ])
     result = load_resume(p)
     assert result.next_attachment_n == 3
@@ -210,3 +284,13 @@ def test_load_resume_next_attachment_n_is_1_when_no_attachments(tmp_path):
     p = _minimal_log(tmp_path)
     result = load_resume(p)
     assert result.next_attachment_n == 1
+
+
+# ---------------------------------------------------------------------------
+# No resumed_context field
+# ---------------------------------------------------------------------------
+
+def test_load_resume_result_has_no_resumed_context_field(tmp_path):
+    p = _minimal_log(tmp_path)
+    result = load_resume(p)
+    assert not hasattr(result, "resumed_context")
