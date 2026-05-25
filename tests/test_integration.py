@@ -32,6 +32,7 @@ def _openai_mock():
 
     chat_resp = MagicMock()
     chat_resp.choices[0].message.content = "Here is my answer."
+    chat_resp.choices[0].message.tool_calls = None
     client.chat.completions.create.return_value = chat_resp
 
     return client

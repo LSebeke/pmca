@@ -11,7 +11,8 @@ from pmca.config import Config
 from pmca.logger import SessionLogger
 from pmca.openai_client import chat_completion
 from pmca.rag.store import VectorStore
-from pmca.types import Attachment, Chunk
+from pmca.tools import execute_write_file, get_tools
+from pmca.types import Attachment, Chunk, ToolCallRequest
 
 
 class ChatSession:
@@ -58,9 +59,35 @@ class ChatSession:
         self._last_rag_chunks = rag_chunks
         self._merge_rag_chunks(rag_chunks)
 
-        # 4. Assemble and call
+        # 4. Assemble and call (with tool loop)
         messages = self._build_messages(message, attachments)
-        response = chat_completion(messages, self.config)
+        tools = get_tools(self.config)
+        response = chat_completion(messages, self.config, tools=tools)
+
+        while isinstance(response, ToolCallRequest):
+            approved, result = execute_write_file(response.arguments, self.config)
+            self.logger.log_tool_call(
+                tool_call_id=response.tool_call_id,
+                name=response.name,
+                arguments=response.arguments,
+                approved=approved,
+                result=result,
+            )
+            messages.append({
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [{
+                    "id": response.tool_call_id,
+                    "type": "function",
+                    "function": {"name": response.name, "arguments": str(response.arguments)},
+                }],
+            })
+            messages.append({
+                "role": "tool",
+                "tool_call_id": response.tool_call_id,
+                "content": result,
+            })
+            response = chat_completion(messages, self.config, tools=tools)
 
         # 5. Update history and log
         self.history.append({"role": "user", "content": message})

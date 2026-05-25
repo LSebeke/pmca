@@ -411,6 +411,77 @@ A single system message computed once in `ChatSession.__init__` and stored as `_
 
 ---
 
+## Phase 23 — write_file tool
+
+**Why here:** Builds on the stable `config.py`, `chat.py`, `openai_client.py`, and `logger.py`. Adds opt-in file-writing capability gated by `write_allowed_dirs` in the config YAML.
+
+### Changes across modules
+
+**`config.py`**
+- Add `write_allowed_dirs: list[Path]` field (default `[]`)
+- Validate: all entries must be absolute paths; existence not required
+
+**`types.py`**
+- Add `ToolCallRequest` dataclass: `tool_call_id: str`, `name: str`, `arguments: dict`
+
+**`openai_client.py`**
+- Add `tools: list[dict] | None = None` parameter to `chat_completion()`
+- When `tools` is provided, pass to API with `parallel_tool_calls=False`
+- Return `ToolCallRequest` when response contains `tool_calls`; return `str` otherwise
+
+**`tools.py`** (new module)
+- `get_tools(config) -> list[dict] | None` — returns `None` if `write_allowed_dirs` is empty; otherwise returns a list with the `write_file` function schema, with allowed dirs listed in the description
+- `execute_write_file(arguments, config) -> tuple[bool, str]` — validates path, prompts user, writes file
+
+**`chat.py`**
+- `process()` passes `get_tools(config)` to `chat_completion()`
+- Tool loop: while response is `ToolCallRequest`, execute tool, log it, append messages, call API again
+- `_build_messages` unchanged
+
+**`logger.py`**
+- Add `log_tool_call(tool_call_id, name, arguments, approved, result)` — appends a `{"type": "tool_call", ...}` entry
+
+### Red
+
+**`config.py`**
+- `write_allowed_dirs` defaults to `[]` when absent from YAML
+- Raises `ConfigError` when a `write_allowed_dirs` entry is non-absolute
+
+**`types.py`**
+- `ToolCallRequest` is a dataclass with `tool_call_id`, `name`, `arguments`
+
+**`openai_client.py`**
+- `chat_completion` with `tools=None` behaves identically to before (returns string)
+- `chat_completion` with tools returns `ToolCallRequest` when model issues a tool call
+- `chat_completion` with tools returns string when model returns text directly
+
+**`tools.py`**
+- `get_tools(config)` returns `None` when `write_allowed_dirs` is empty
+- `get_tools(config)` returns a list with one schema dict when dirs are configured; the description contains each allowed dir
+- `execute_write_file` returns error string when path is outside allowed dirs (no prompt)
+- `execute_write_file` prints approval prompt in Option C format; returns denial string when user inputs anything other than `y`
+- `execute_write_file` shows "File exists — will be overwritten." when path exists
+- `execute_write_file` shows "File does not exist." when path is new
+- `execute_write_file` creates parent dirs and writes file on approval; returns `"Written: /path (N bytes)"`
+- `execute_write_file` returns error string on I/O error without crashing
+
+**`chat.py`**
+- `process()` passes tools to `chat_completion` and loops on `ToolCallRequest`
+- Tool result messages are appended to the message list in the correct OpenAI format
+- Final text response is used as the assistant reply
+- Tool calls are logged via `logger.log_tool_call`
+
+**`logger.py`**
+- `log_tool_call` appends a well-formed `{"type": "tool_call", ...}` JSON line
+
+### Green
+Apply all source changes listed above.
+
+### Refactor
+- None needed — changes are localised to five modules.
+
+---
+
 ## Phase 11 — Integration smoke test
 
 One end-to-end test with real files, mocked OpenAI API, and a real temp log directory:

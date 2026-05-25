@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import json
 import time
 
 import openai
 
 from pmca.config import Config
+from pmca.types import ToolCallRequest
 
 _BACKOFF = [1, 2, 4]
 _MAX_RETRIES = len(_BACKOFF)
@@ -18,9 +20,16 @@ class APITransientError(Exception):
     pass
 
 
-def chat_completion(messages: list[dict], config: Config) -> str:
+def chat_completion(
+    messages: list[dict],
+    config: Config,
+    tools: list[dict] | None = None,
+) -> str | ToolCallRequest:
     client = openai.OpenAI()
     kwargs = _optional_params(config)
+    if tools is not None:
+        kwargs["tools"] = tools
+        kwargs["parallel_tool_calls"] = False
     last_exc: Exception | None = None
 
     for attempt in range(_MAX_RETRIES + 1):
@@ -30,7 +39,15 @@ def chat_completion(messages: list[dict], config: Config) -> str:
                 messages=messages,
                 **kwargs,
             )
-            return response.choices[0].message.content
+            msg = response.choices[0].message
+            if msg.tool_calls:
+                tc = msg.tool_calls[0]
+                return ToolCallRequest(
+                    tool_call_id=tc.id,
+                    name=tc.function.name,
+                    arguments=json.loads(tc.function.arguments),
+                )
+            return msg.content
         except (openai.RateLimitError, openai.APIConnectionError) as exc:
             last_exc = exc
         except openai.APIStatusError as exc:

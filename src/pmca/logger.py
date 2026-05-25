@@ -59,6 +59,26 @@ class SessionLogger:
         self._jsonl.write(json.dumps(asst_entry) + "\n")
         self._jsonl.flush()
 
+    def log_tool_call(
+        self,
+        tool_call_id: str,
+        name: str,
+        arguments: dict,
+        approved: bool,
+        result: str,
+    ) -> None:
+        entry = {
+            "type": "tool_call",
+            "timestamp": _utcnow(),
+            "tool_call_id": tool_call_id,
+            "name": name,
+            "arguments": arguments,
+            "approved": approved,
+            "result": result,
+        }
+        self._jsonl.write(json.dumps(entry) + "\n")
+        self._jsonl.flush()
+
     def log_debug(self, message: str) -> None:
         self._log.write(f"[{_utcnow()}] {message}\n")
         self._log.flush()

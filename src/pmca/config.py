@@ -23,6 +23,7 @@ class Config:
     top_k_chunks: int
     log_folder: Path
     startup_docs: list[tuple[Path, str]] = field(default_factory=list)
+    write_allowed_dirs: list[Path] = field(default_factory=list)
     max_attachment_kb: int = 500
     history_token_budget: int = 4000
     temperature: float | None = None
@@ -44,6 +45,7 @@ def load_config(config_name: str) -> Config:
     _validate_log_folder(data["log_folder"])
     _validate_rag_files(data.get("rag_files") or [])
     _validate_startup_docs(data.get("startup_docs") or [])
+    _validate_write_allowed_dirs(data.get("write_allowed_dirs") or [])
 
     return Config(
         name=data["name"],
@@ -53,6 +55,7 @@ def load_config(config_name: str) -> Config:
         top_k_chunks=data["top_k_chunks"],
         log_folder=Path(data["log_folder"]).expanduser(),
         startup_docs=_load_startup_docs(data.get("startup_docs") or []),
+        write_allowed_dirs=[Path(p).expanduser() for p in (data.get("write_allowed_dirs") or [])],
         max_attachment_kb=data.get("max_attachment_kb", 500),
         history_token_budget=data.get("history_token_budget", 4000),
         temperature=data.get("temperature"),
@@ -91,6 +94,13 @@ def _validate_startup_docs(paths: list[str]) -> None:
 
 def _load_startup_docs(paths: list[str]) -> list[tuple[Path, str]]:
     return [(Path(p).expanduser(), Path(p).expanduser().read_text()) for p in paths]
+
+
+def _validate_write_allowed_dirs(paths: list[str]) -> None:
+    for raw in paths:
+        p = Path(raw).expanduser()
+        if not p.is_absolute():
+            raise ConfigError(f"write_allowed_dirs paths must be absolute, got: {raw}")
 
 
 def _validate_rag_files(paths: list[str]) -> None:

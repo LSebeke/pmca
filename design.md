@@ -41,6 +41,7 @@ class Config:
     rag_files: list[Path]        # absolute paths only, validated at load time
     top_k_chunks: int
     log_folder: Path
+    write_allowed_dirs: list[Path] = field(default_factory=list)  # absolute paths; empty → write_file tool not registered
     max_attachment_kb: int = 500
     history_token_budget: int = 4000
     # OpenAI optional params (passed through as-is if set)
@@ -73,7 +74,21 @@ class Attachment:
     size_warning: bool  # True if file exceeded max_attachment_kb
 ```
 
-### 3.4 LogEntry (JSONL)
+### 3.4 ToolCallRequest
+
+```python
+@dataclass
+class ToolCallRequest:
+    tool_call_id: str   # opaque ID from the OpenAI response, echoed back in the tool result message
+    name: str           # tool name, e.g. "write_file"
+    arguments: dict     # parsed JSON arguments, e.g. {"path": "...", "content": "...", "description": "..."}
+```
+
+Returned by `chat_completion()` when the model issues a tool call instead of a text response. `ChatSession.process()` inspects this, executes the tool, sends the result back, and loops until a text response is received.
+
+---
+
+### 3.5 LogEntry (JSONL)
 
 Three entry types, distinguished by a mandatory `type` field:
 
@@ -96,6 +111,19 @@ Three entry types, distinguished by a mandatory `type` field:
     "attachments": [                        # present on user turns only
         {"identifier": "CONTEXT_1", "path": "...", "content": "...", "size_warning": false}
     ]
+}
+```
+
+```python
+# Written once per tool call within a turn
+{
+    "type": "tool_call",
+    "timestamp": "2025-05-14T15:32:10Z",
+    "tool_call_id": "call_abc123",
+    "name": "write_file",
+    "arguments": {"path": "/abs/path/file.py", "content": "...", "description": "..."},
+    "approved": true,        # false if user denied
+    "result": "Written: /abs/path/file.py (1 842 bytes)"  # or denial/error message
 }
 ```
 
@@ -123,6 +151,7 @@ Validation rules:
 - `OPENAI_API_KEY` must be present in environment
 - `top_k_chunks` must be a positive integer
 - `max_attachment_kb` and `history_token_budget` must be positive integers if provided
+- All `write_allowed_dirs` paths must be absolute (existence not required — dirs may be created later)
 
 Path expansion: before the absolute-path check, all path fields (`log_folder`, `rag_files`, `startup_docs`) are expanded via `Path.expanduser()`. This allows cross-platform configs to use `~` (e.g. `log_folder: ~/.pmca/logs`) without hardcoding OS-specific absolute paths.
 
@@ -278,10 +307,15 @@ class ChatSession:
           3. Query RAG store for top_k chunks. Merge new chunks into session_rag_chunks
              (deduplicated by (source_file, label)).
           4. Assemble message list (see Section 5).
-          5. Call openai_client.chat_completion().
-          6. Append user + assistant turns to self.history.
-          7. Log exchange via SessionLogger.
-          8. Return (assistant_response, turns_dropped, last_rag_chunks).
+          5. Call openai_client.chat_completion() with tools list (if write_allowed_dirs set).
+          6. Tool loop: while response is a ToolCallRequest:
+               a. Execute the tool (write_file): validate path, prompt user for approval, write.
+               b. Log the tool call via SessionLogger.
+               c. Append assistant tool-call message + tool result message to messages list.
+               d. Call chat_completion() again.
+          7. Append user + assistant turns to self.history.
+          8. Log exchange via SessionLogger.
+          9. Return (assistant_response, turns_dropped).
         """
 
     def rotate_logger(self) -> Path:
@@ -313,9 +347,16 @@ class ChatSession:
 **Responsibilities:** Send chat completion requests with retry logic.
 
 ```python
-def chat_completion(messages: list[dict], config: Config) -> str:
+def chat_completion(
+    messages: list[dict],
+    config: Config,
+    tools: list[dict] | None = None,
+) -> str | ToolCallRequest:
     """
     Calls openai.chat.completions.create() with config model + optional params.
+    If tools is not None, passes them as the `tools` argument (parallel_tool_calls=False).
+    Returns a ToolCallRequest if the model issues a tool call, otherwise returns the
+    assistant message string.
     Retries up to 3 times on transient errors (429, network timeout, 5xx)
     with exponential backoff (1s, 2s, 4s).
     Prints "[retrying... attempt N/3]" before each retry.
@@ -328,7 +369,50 @@ Permanent errors: `AuthenticationError`, `BadRequestError`, other `APIStatusErro
 
 ---
 
-### 4.8 `logger.py`
+### 4.8 `tools.py`
+
+**Responsibilities:** Define the `write_file` tool schema and implement its execution, including path validation, user approval prompt, and file write.
+
+```python
+WRITE_FILE_SCHEMA: dict  # OpenAI function schema for write_file
+
+def get_tools(config: Config) -> list[dict] | None:
+    """
+    Returns the tools list to pass to chat_completion, or None if write_file
+    is not enabled (i.e. config.write_allowed_dirs is empty).
+    The tool description includes the list of allowed directories so the model
+    knows where it may write.
+    """
+
+def execute_write_file(arguments: dict, config: Config) -> tuple[bool, str]:
+    """
+    Validate path against config.write_allowed_dirs, prompt user for approval,
+    and write the file if approved.
+
+    Approval prompt format:
+      [write_file] /full/resolved/path (N bytes)
+      Reason: <description>
+      File exists — will be overwritten. Approve? [y/N]   ← if path exists
+      File does not exist. Approve? [y/N]                 ← if new
+
+    Path validation:
+      - Resolve to absolute path (Path.resolve())
+      - Must be within one of config.write_allowed_dirs (use Path.is_relative_to())
+      - If invalid: return (False, "Error: path ... is outside allowed directories: ...")
+
+    On approval:
+      - Create parent directories (mkdir -p)
+      - Write content (UTF-8)
+      - Return (True, "Written: /full/path (N bytes)")
+
+    On denial:
+      - Return (False, "Write denied by user. Path: /full/path")
+    """
+```
+
+---
+
+### 4.9 `logger.py`
 
 **Responsibilities:** Write per-session JSONL chat log and plaintext debug log. Both files are opened at session start and flushed after every write (no buffering).
 
@@ -377,7 +461,7 @@ class SessionLogger:
 
 ---
 
-### 4.9 `resume.py`
+### 4.10 `resume.py`
 
 **Responsibilities:** Parse a `chat_<timestamp>.jsonl` file, validate it strictly, and return the data needed to bootstrap a resumed session. The log is the authoritative source of truth — no `[RESUMED_CONTEXT]` wrapper is used; the reconstructed fields are injected into `ChatSession` the same way a fresh session would set them.
 
@@ -415,7 +499,7 @@ def load_resume(path: Path) -> ResumedSession:
 
 ---
 
-### 4.10 `repl.py`
+### 4.11 `repl.py`
 
 **Responsibilities:** Run the interactive input loop using `prompt_toolkit`. Dispatch slash commands. Print chat output.
 
@@ -460,7 +544,7 @@ def _extract(cmd: str, session: ChatSession) -> None:
 
 ---
 
-### 4.10 `cli.py`
+### 4.12 `cli.py`
 
 **Responsibilities:** Parse CLI args, bootstrap all components, start REPL.
 
@@ -615,6 +699,9 @@ Key bindings:
 | Permanent API error (chat) | Print error to chat; log to debug log; session continues |
 | History trimmed | Print `[N earlier turn(s) omitted from context]` in chat UI |
 | Unexpected exit / crash | Partial JSONL log is valid; no finalisation step needed |
+| write_file path outside allowed dirs | Tool returns error string to model; user is not prompted |
+| User denies write_file | Tool returns `"Write denied by user. Path: ..."` to model; session continues |
+| write_file I/O error (e.g. permission denied) | Tool returns error string to model; session continues |
 | `--resume` file not found | Print error, exit before session starts |
 | `--resume` file has zero valid turns | Print error, exit before session starts |
 | `--resume` file has malformed lines | Print error with line numbers, exit before session starts |

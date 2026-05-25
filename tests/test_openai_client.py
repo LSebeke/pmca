@@ -8,6 +8,7 @@ import pytest
 
 from pmca.config import Config
 from pmca.openai_client import APIError, APITransientError, chat_completion
+from pmca.types import ToolCallRequest
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -57,6 +58,7 @@ def _bad_request_error() -> openai.BadRequestError:
 def _mock_success(content: str = "Hello!") -> MagicMock:
     response = MagicMock()
     response.choices[0].message.content = content
+    response.choices[0].message.tool_calls = None
     return response
 
 
@@ -205,3 +207,53 @@ def test_no_retry_on_permanent_error():
             with pytest.raises(APIError):
                 chat_completion([], _config())
     assert mock_create.call_count == 1
+
+
+# ---------------------------------------------------------------------------
+# Tool calling
+# ---------------------------------------------------------------------------
+
+def _mock_tool_call_response(tool_call_id: str = "call_abc", name: str = "write_file", args_json: str = '{"path": "/tmp/f.py", "content": "x", "description": "test"}') -> MagicMock:
+    import json
+    tool_call = MagicMock()
+    tool_call.id = tool_call_id
+    tool_call.function.name = name
+    tool_call.function.arguments = args_json
+    response = MagicMock()
+    response.choices[0].message.content = None
+    response.choices[0].message.tool_calls = [tool_call]
+    return response
+
+
+def test_returns_tool_call_request_when_model_issues_tool_call():
+    with patch("pmca.openai_client.openai.OpenAI") as MockClient:
+        MockClient.return_value.chat.completions.create.return_value = _mock_tool_call_response()
+        result = chat_completion([], _config(), tools=[{"type": "function", "function": {"name": "write_file"}}])
+
+    assert isinstance(result, ToolCallRequest)
+    assert result.tool_call_id == "call_abc"
+    assert result.name == "write_file"
+    assert result.arguments["path"] == "/tmp/f.py"
+
+
+def test_tools_passed_to_api_with_parallel_tool_calls_false():
+    tools = [{"type": "function", "function": {"name": "write_file"}}]
+    with patch("pmca.openai_client.openai.OpenAI") as MockClient:
+        mock_create = MockClient.return_value.chat.completions.create
+        mock_create.return_value = _mock_success()
+        chat_completion([], _config(), tools=tools)
+
+    kwargs = mock_create.call_args.kwargs
+    assert kwargs["tools"] == tools
+    assert kwargs["parallel_tool_calls"] is False
+
+
+def test_tools_none_does_not_pass_tools_kwarg():
+    with patch("pmca.openai_client.openai.OpenAI") as MockClient:
+        mock_create = MockClient.return_value.chat.completions.create
+        mock_create.return_value = _mock_success()
+        chat_completion([], _config(), tools=None)
+
+    kwargs = mock_create.call_args.kwargs
+    assert "tools" not in kwargs
+    assert "parallel_tool_calls" not in kwargs

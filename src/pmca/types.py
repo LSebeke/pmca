@@ -17,3 +17,10 @@ class Attachment:
     content: str
     identifier: str
     size_warning: bool
+
+
+@dataclass
+class ToolCallRequest:
+    tool_call_id: str
+    name: str
+    arguments: dict

@@ -212,6 +212,32 @@ def test_optional_fields_default_correctly(tmp_path):
     assert cfg.frequency_penalty is None
     assert cfg.presence_penalty is None
     assert cfg.startup_docs == []
+    assert cfg.write_allowed_dirs == []
+
+
+def test_write_allowed_dirs_loads_absolute_paths(tmp_path):
+    rag_file = tmp_path / "code.py"
+    rag_file.write_text("x = 1")
+    log_folder = tmp_path / "logs"
+    allowed = tmp_path / "output"
+
+    yaml_content = minimal_yaml(rag_file, log_folder) + f"write_allowed_dirs:\n  - {allowed}\n"
+    cfg_path = write_yaml(tmp_path, "cfg.yaml", yaml_content)
+    cfg = load_config(str(cfg_path))
+
+    assert cfg.write_allowed_dirs == [allowed]
+
+
+def test_write_allowed_dirs_raises_when_not_absolute(tmp_path):
+    rag_file = tmp_path / "code.py"
+    rag_file.write_text("x = 1")
+    log_folder = tmp_path / "logs"
+
+    yaml_content = minimal_yaml(rag_file, log_folder) + "write_allowed_dirs:\n  - relative/output\n"
+    cfg_path = write_yaml(tmp_path, "cfg.yaml", yaml_content)
+
+    with pytest.raises(ConfigError, match="absolute"):
+        load_config(str(cfg_path))
 
 
 def test_optional_fields_override(tmp_path):

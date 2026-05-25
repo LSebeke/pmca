@@ -609,3 +609,101 @@ def test_trim_history_returns_turned_dropped_in_process():
             _, turns_dropped = session.process("new q")
 
     assert turns_dropped == 1
+
+
+# ---------------------------------------------------------------------------
+# Tool loop
+# ---------------------------------------------------------------------------
+
+def test_process_passes_tools_to_chat_completion_when_write_allowed_dirs_set(tmp_path):
+    cfg = _config(write_allowed_dirs=[tmp_path])
+    session, store, _ = _make_session(cfg)
+
+    with patch("pmca.chat.chat_completion", return_value="done") as mock_cc:
+        with patch("pmca.chat.parse_attachment_paths", return_value=[]):
+            session.process("write something")
+
+    _, kwargs = mock_cc.call_args
+    assert "tools" in kwargs
+    assert kwargs["tools"] is not None
+
+
+def test_process_passes_no_tools_when_write_allowed_dirs_empty():
+    session, store, _ = _make_session(_config(write_allowed_dirs=[]))
+
+    with patch("pmca.chat.chat_completion", return_value="done") as mock_cc:
+        with patch("pmca.chat.parse_attachment_paths", return_value=[]):
+            session.process("hello")
+
+    _, kwargs = mock_cc.call_args
+    assert kwargs.get("tools") is None
+
+
+def test_process_tool_loop_executes_tool_and_continues(tmp_path):
+    from pmca.types import ToolCallRequest
+    cfg = _config(write_allowed_dirs=[tmp_path])
+    session, store, logger = _make_session(cfg)
+
+    tool_req = ToolCallRequest(
+        tool_call_id="call_1",
+        name="write_file",
+        arguments={"path": str(tmp_path / "out.py"), "content": "x=1\n", "description": "test"},
+    )
+
+    with patch("pmca.chat.chat_completion", side_effect=[tool_req, "All done!"]) as mock_cc:
+        with patch("pmca.chat.parse_attachment_paths", return_value=[]):
+            with patch("pmca.chat.execute_write_file", return_value=(True, "Written: /out.py (4 bytes)")) as mock_exec:
+                response, _ = session.process("write a file")
+
+    assert response == "All done!"
+    mock_exec.assert_called_once()
+    assert mock_cc.call_count == 2
+
+
+def test_process_tool_loop_logs_tool_call(tmp_path):
+    from pmca.types import ToolCallRequest
+    cfg = _config(write_allowed_dirs=[tmp_path])
+    session, store, logger = _make_session(cfg)
+
+    tool_req = ToolCallRequest(
+        tool_call_id="call_1",
+        name="write_file",
+        arguments={"path": str(tmp_path / "out.py"), "content": "x\n", "description": "test"},
+    )
+
+    with patch("pmca.chat.chat_completion", side_effect=[tool_req, "Done"]):
+        with patch("pmca.chat.parse_attachment_paths", return_value=[]):
+            with patch("pmca.chat.execute_write_file", return_value=(True, "Written: /out.py (2 bytes)")):
+                session.process("write")
+
+    logger.log_tool_call.assert_called_once_with(
+        tool_call_id="call_1",
+        name="write_file",
+        arguments=tool_req.arguments,
+        approved=True,
+        result="Written: /out.py (2 bytes)",
+    )
+
+
+def test_process_second_api_call_includes_tool_result_messages(tmp_path):
+    from pmca.types import ToolCallRequest
+    cfg = _config(write_allowed_dirs=[tmp_path])
+    session, store, _ = _make_session(cfg)
+
+    tool_req = ToolCallRequest(
+        tool_call_id="call_1",
+        name="write_file",
+        arguments={"path": str(tmp_path / "f.py"), "content": "x\n", "description": "d"},
+    )
+
+    with patch("pmca.chat.chat_completion", side_effect=[tool_req, "Done"]) as mock_cc:
+        with patch("pmca.chat.parse_attachment_paths", return_value=[]):
+            with patch("pmca.chat.execute_write_file", return_value=(False, "Write denied by user. Path: /f.py")):
+                session.process("write")
+
+    second_call_messages = mock_cc.call_args_list[1][0][0]
+    roles = [m["role"] for m in second_call_messages]
+    assert "tool" in roles
+    tool_msg = next(m for m in second_call_messages if m["role"] == "tool")
+    assert tool_msg["tool_call_id"] == "call_1"
+    assert "denied" in tool_msg["content"].lower()

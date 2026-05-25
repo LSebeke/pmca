@@ -256,3 +256,46 @@ def test_second_logger_appends_not_overwrites(tmp_path):
 
     lines = _read_jsonl(tmp_path / "chat_ts.jsonl")
     assert len(lines) == 4
+
+
+# ---------------------------------------------------------------------------
+# log_tool_call
+# ---------------------------------------------------------------------------
+
+def test_log_tool_call_writes_jsonl_entry(tmp_path):
+    logger = SessionLogger(tmp_path, "ts")
+    logger.log_tool_call(
+        tool_call_id="call_abc",
+        name="write_file",
+        arguments={"path": "/tmp/f.py", "content": "x", "description": "test"},
+        approved=True,
+        result="Written: /tmp/f.py (1 bytes)",
+    )
+    logger.close()
+
+    lines = _read_jsonl(tmp_path / "chat_ts.jsonl")
+    entry = lines[-1]
+    assert entry["type"] == "tool_call"
+    assert entry["tool_call_id"] == "call_abc"
+    assert entry["name"] == "write_file"
+    assert entry["arguments"]["path"] == "/tmp/f.py"
+    assert entry["approved"] is True
+    assert entry["result"] == "Written: /tmp/f.py (1 bytes)"
+    assert "timestamp" in entry
+
+
+def test_log_tool_call_denied_entry(tmp_path):
+    logger = SessionLogger(tmp_path, "ts")
+    logger.log_tool_call(
+        tool_call_id="call_xyz",
+        name="write_file",
+        arguments={"path": "/tmp/f.py", "content": "x", "description": "test"},
+        approved=False,
+        result="Write denied by user. Path: /tmp/f.py",
+    )
+    logger.close()
+
+    lines = _read_jsonl(tmp_path / "chat_ts.jsonl")
+    entry = lines[-1]
+    assert entry["approved"] is False
+    assert "denied" in entry["result"].lower()
