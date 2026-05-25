@@ -220,6 +220,53 @@ Implement `main()` using `argparse`. Wire all components together.
 
 ---
 
+## Phase 19 — Windows compatibility
+
+**Why here:** All production code and tests are in place; this phase makes the repo usable on `win-64` without changing any existing behaviour on Linux.
+
+### Changes
+
+**`config.py`**
+- In `_validate_log_folder`, `_validate_rag_files`, and `_validate_startup_docs`: call `Path(value).expanduser()` before the `is_absolute()` check
+- In `load_config`: apply `expanduser()` when constructing `Path` objects for all three path fields
+
+**`src/pmca/configs/*.yaml`** (all three premade configs)
+- Change `log_folder: /tmp/pmca-logs` → `log_folder: ~/.pmca/logs`
+
+**`attachments.py`**
+- `parse_attachment_paths`: strip leading/trailing `"` from the captured regex group before passing to `Path()`
+- `substitute_identifiers`: build the lookup dict with `a.path` (a `Path` object) as the key; look up via `Path(raw)` — handles mixed `/` and `\` on Windows
+
+**Tests — `test_config.py`**
+- Parametrize snippets: replace `log_folder: /tmp/logs` with `log_folder: ~/logs`
+- `test_raises_when_rag_file_does_not_exist`: replace `/nonexistent/path/file.py` with `tmp_path / "no_such_file.py"`
+- `test_startup_docs_raises_when_path_does_not_exist`: replace `/nonexistent/doc.md` with `tmp_path / "no_such_doc.md"`
+- Add `test_tilde_expanded_in_log_folder`, `test_tilde_expanded_in_rag_files`, `test_tilde_expanded_in_startup_docs`
+
+**Tests — `test_attachments.py`**
+- `test_parse_single_absolute_path`, `test_parse_multiple_paths`: replace hardcoded `/abs/...` Unix paths with `tmp_path`-derived paths
+- `test_substitute_leaves_unmatched_tokens_unchanged`: replace `/other/path.py` with `tmp_path`-derived path
+- Add `test_parse_strips_double_quotes_from_path` (using `tmp_path`)
+- Add `test_substitute_handles_mixed_slashes` (using `tmp_path`)
+
+**Tests — `test_repl.py`**
+- `_chunk` helper: replace `Path("/a.py")` with a `tmp_path`-independent string or parametrised fixture; update `test_rag_prints_chunk_source` assertion accordingly
+- `test_clear_prints_new_session_path`: replace the mock `Path("/logs/...")` value with a `tmp_path`-based path
+
+**`README.md`** (new section)
+- Add a short "Windows setup" paragraph instructing users to run `pixi install` after cloning
+
+### Red
+Write the new tests listed above; all fail on unmodified code.
+
+### Green
+Apply the source changes listed above; all tests pass.
+
+### Refactor
+None needed — changes are localised.
+
+---
+
 ## Phase 11 — Integration smoke test
 
 One end-to-end test with real files, mocked OpenAI API, and a real temp log directory:

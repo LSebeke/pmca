@@ -12,5 +12,5 @@ system_prompt: |
   - Stop when every branch is resolved and the design is consistent end-to-end.
   - When every branch is resolved or the user asks for it, emit the current state of the design document, fenced inside a ```markdown block.
 top_k_chunks: 0
-log_folder: /tmp/pmca-logs
+log_folder: ~/.pmca/logs
 history_token_budget: 8000

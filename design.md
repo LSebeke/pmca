@@ -114,6 +114,8 @@ Validation rules:
 - `top_k_chunks` must be a positive integer
 - `max_attachment_kb` and `history_token_budget` must be positive integers if provided
 
+Path expansion: before the absolute-path check, all path fields (`log_folder`, `rag_files`, `startup_docs`) are expanded via `Path.expanduser()`. This allows cross-platform configs to use `~` (e.g. `log_folder: ~/.pmca/logs`) without hardcoding OS-specific absolute paths.
+
 ---
 
 ### 4.2 `rag/chunker.py`
@@ -202,7 +204,11 @@ class VectorStore:
 
 ```python
 def parse_attachment_paths(message: str) -> list[Path]:
-    """Extract all [[...]] tokens. Raise AttachmentError if any path is non-absolute."""
+    """
+    Extract all [[...]] tokens. Strip leading/trailing double-quotes from the
+    captured path string (Windows Explorer wraps copied paths in quotes, e.g.
+    [["C:\\temp\\file.py"]]). Raise AttachmentError if any path is non-absolute.
+    """
 
 def resolve_attachments(
     paths: list[Path],
@@ -220,7 +226,11 @@ def resolve_attachments(
     """
 
 def substitute_identifiers(message: str, attachments: list[Attachment]) -> str:
-    """Replace each [[filepath]] token with its CONTEXT_<n> identifier."""
+    """
+    Replace each [[filepath]] token with its CONTEXT_<n> identifier.
+    Lookup is keyed on Path objects (not strings) so that mixed forward/backward
+    slash styles on Windows still match (e.g. C:/temp/f.py == C:\\temp\\f.py).
+    """
 ```
 
 ---
@@ -572,7 +582,30 @@ Key bindings:
 
 ---
 
-## 10. Dependencies
+## 10. Windows Compatibility
+
+`pmca` targets `linux-64` and `win-64` (see `pixi.toml`). The following design decisions ensure cross-platform operation:
+
+| Area | Decision |
+|---|---|
+| Path fields in config | Expanded via `Path.expanduser()` before the absolute-path check; premade configs use `~/.pmca/logs` |
+| Attachment path parsing | Leading/trailing `"` stripped from `[[...]]` tokens (Windows Explorer quote-wraps copied paths) |
+| Attachment identifier substitution | Keyed on `Path` objects so mixed `/` and `\` styles match on Windows |
+| REPL and I/O | `prompt_toolkit` provides cross-platform terminal support; all file I/O uses `pathlib` and explicit `encoding="utf-8"` |
+
+### First-time setup on Windows
+
+After cloning, run:
+
+```
+pixi install
+```
+
+This regenerates `pixi.lock` with `win-64` package resolutions if not already present.
+
+---
+
+## 11. Dependencies
 
 | Package | Purpose |
 |---|---|

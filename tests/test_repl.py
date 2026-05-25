@@ -21,8 +21,8 @@ def _session(**attrs):
     return session
 
 
-def _chunk(label: str = "fn `foo`") -> Chunk:
-    return Chunk(content="def foo(): pass", source_file=Path("/a.py"), label=label)
+def _chunk(label: str = "fn `foo`", source: str = "a.py") -> Chunk:
+    return Chunk(content="def foo(): pass", source_file=Path(source), label=label)
 
 
 def _run(inputs: list, session=None):
@@ -95,11 +95,11 @@ def test_rag_prints_chunk_labels(capsys):
 
 
 def test_rag_prints_chunk_source(capsys):
-    chunk = _chunk()
+    chunk = _chunk(source="a.py")
     session = _session(_last_rag_chunks=[chunk])
     handle_command("/rag", session)
     out = capsys.readouterr().out
-    assert "/a.py" in out
+    assert "a.py" in out
 
 
 def test_rag_no_data_prints_notice(capsys):
@@ -235,13 +235,14 @@ def test_clear_calls_rotate_logger():
     session.rotate_logger.assert_called_once()
 
 
-def test_clear_prints_new_session_path(capsys):
+def test_clear_prints_new_session_path(tmp_path, capsys):
     session = _session()
-    session.rotate_logger.return_value = Path("/logs/chat_2026-05-24_14-00-00.jsonl")
+    log_path = tmp_path / "chat_2026-05-24_14-00-00.jsonl"
+    session.rotate_logger.return_value = log_path
     handle_command("/clear", session)
     out = capsys.readouterr().out
     assert "New session:" in out
-    assert "/logs/chat_2026-05-24_14-00-00.jsonl" in out
+    assert str(log_path) in out
 
 
 # ---------------------------------------------------------------------------

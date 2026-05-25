@@ -49,9 +49,9 @@ def load_config(config_name: str) -> Config:
         name=data["name"],
         model=data["model"],
         system_prompt=data["system_prompt"],
-        rag_files=[Path(p) for p in (data.get("rag_files") or [])],
+        rag_files=[Path(p).expanduser() for p in (data.get("rag_files") or [])],
         top_k_chunks=data["top_k_chunks"],
-        log_folder=Path(data["log_folder"]),
+        log_folder=Path(data["log_folder"]).expanduser(),
         startup_docs=_load_startup_docs(data.get("startup_docs") or []),
         max_attachment_kb=data.get("max_attachment_kb", 500),
         history_token_budget=data.get("history_token_budget", 4000),
@@ -76,13 +76,13 @@ def _validate_required(data: dict) -> None:
 
 
 def _validate_log_folder(value: str) -> None:
-    if not Path(value).is_absolute():
+    if not Path(value).expanduser().is_absolute():
         raise ConfigError(f"log_folder must be an absolute path, got: {value}")
 
 
 def _validate_startup_docs(paths: list[str]) -> None:
     for raw in paths:
-        p = Path(raw)
+        p = Path(raw).expanduser()
         if not p.is_absolute():
             raise ConfigError(f"startup_docs paths must be absolute, got: {raw}")
         if not p.exists():
@@ -90,12 +90,12 @@ def _validate_startup_docs(paths: list[str]) -> None:
 
 
 def _load_startup_docs(paths: list[str]) -> list[tuple[Path, str]]:
-    return [(Path(p), Path(p).read_text()) for p in paths]
+    return [(Path(p).expanduser(), Path(p).expanduser().read_text()) for p in paths]
 
 
 def _validate_rag_files(paths: list[str]) -> None:
     for raw in paths:
-        p = Path(raw)
+        p = Path(raw).expanduser()
         if not p.is_absolute():
             raise ConfigError(f"rag_files paths must be absolute, got: {raw}")
         if not p.exists():

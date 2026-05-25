@@ -33,5 +33,5 @@ system_prompt: |
   - [ ] Implementation is minimal for this test
   - [ ] No speculative features added
 top_k_chunks: 0
-log_folder: /tmp/pmca-logs
+log_folder: ~/.pmca/logs
 history_token_budget: 8000

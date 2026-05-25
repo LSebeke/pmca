@@ -17,19 +17,27 @@ from pmca.types import Attachment
 # parse_attachment_paths
 # ---------------------------------------------------------------------------
 
-def test_parse_single_absolute_path():
-    paths = parse_attachment_paths("see [[/abs/path/file.py]] here")
-    assert paths == [Path("/abs/path/file.py")]
+def test_parse_single_absolute_path(tmp_path):
+    f = tmp_path / "file.py"
+    paths = parse_attachment_paths(f"see [[{f}]] here")
+    assert paths == [f]
 
 
-def test_parse_multiple_paths():
-    msg = "[[/a/b.py]] and [[/c/d.md]]"
-    paths = parse_attachment_paths(msg)
-    assert paths == [Path("/a/b.py"), Path("/c/d.md")]
+def test_parse_multiple_paths(tmp_path):
+    a = tmp_path / "a.py"
+    b = tmp_path / "b.md"
+    paths = parse_attachment_paths(f"[[{a}]] and [[{b}]]")
+    assert paths == [a, b]
 
 
 def test_parse_returns_empty_when_no_tokens():
     assert parse_attachment_paths("no attachments here") == []
+
+
+def test_parse_strips_double_quotes_from_path(tmp_path):
+    f = tmp_path / "file.py"
+    paths = parse_attachment_paths(f'[["{f}"]]')
+    assert paths == [f]
 
 
 def test_parse_raises_for_relative_path():
@@ -199,7 +207,17 @@ def test_substitute_multiple(tmp_path):
 
 def test_substitute_leaves_unmatched_tokens_unchanged(tmp_path):
     f = tmp_path / "code.py"
+    other = tmp_path / "other.py"
     attachments = [Attachment(path=f, content="", identifier="CONTEXT_1", size_warning=False)]
-    msg = "[[/other/path.py]] stays"
+    msg = f"[[{other}]] stays"
     result = substitute_identifiers(msg, attachments)
-    assert result == "[[/other/path.py]] stays"
+    assert result == f"[[{other}]] stays"
+
+
+def test_substitute_matches_via_path_normalisation(tmp_path):
+    f = tmp_path / "code.py"
+    attachments = [Attachment(path=f, content="", identifier="CONTEXT_1", size_warning=False)]
+    # Path normalises away the redundant "." so the lookup still matches
+    dotted = str(tmp_path) + "/./code.py"
+    result = substitute_identifiers(f"[[{dotted}]]", attachments)
+    assert result == "CONTEXT_1"

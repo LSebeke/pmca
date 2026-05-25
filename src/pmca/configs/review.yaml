@@ -27,5 +27,5 @@ system_prompt: |
   - After the initial review, wait for the user to ask questions or clarify design decisions. Do not proactively rewrite code unless asked.
   - When asked to produce a review document, emit a fenced ```markdown block with the current state of the review.
 top_k_chunks: 0
-log_folder: /tmp/pmca-logs
+log_folder: ~/.pmca/logs
 history_token_budget: 8000

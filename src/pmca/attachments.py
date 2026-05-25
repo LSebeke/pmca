@@ -21,7 +21,7 @@ class AttachmentAborted(Exception):
 def parse_attachment_paths(message: str) -> list[Path]:
     paths = []
     for match in _TOKEN_RE.finditer(message):
-        raw = match.group(1)
+        raw = match.group(1).strip('"')
         path = Path(raw)
         if not path.is_absolute():
             raise AttachmentError(f"Attachment path must be absolute, got: {raw}")
@@ -62,10 +62,10 @@ def resolve_attachments(
 
 
 def substitute_identifiers(message: str, attachments: list[Attachment]) -> str:
-    path_to_id = {str(a.path): a.identifier for a in attachments}
+    path_to_id = {a.path: a.identifier for a in attachments}
 
     def _replace(match: re.Match) -> str:
-        raw = match.group(1)
-        return path_to_id.get(raw, match.group(0))
+        raw = match.group(1).strip('"')
+        return path_to_id.get(Path(raw), match.group(0))
 
     return _TOKEN_RE.sub(_replace, message)
