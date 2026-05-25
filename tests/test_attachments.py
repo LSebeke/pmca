@@ -71,6 +71,18 @@ def test_resolve_assigns_context_identifiers_in_order(tmp_path):
     assert result[1].identifier == "CONTEXT_2"
 
 
+def test_resolve_start_n_shifts_identifier_numbering(tmp_path):
+    a = tmp_path / "a.py"
+    b = tmp_path / "b.py"
+    a.write_text("x = 1")
+    b.write_text("y = 2")
+
+    result = resolve_attachments([a, b], max_attachment_kb=500, unsafe=True, start_n=3)
+
+    assert result[0].identifier == "CONTEXT_3"
+    assert result[1].identifier == "CONTEXT_4"
+
+
 def test_resolve_reads_file_content(tmp_path):
     f = tmp_path / "code.py"
     f.write_text("def hello(): pass")

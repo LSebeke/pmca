@@ -214,6 +214,8 @@ def resolve_attachments(
     paths: list[Path],
     max_attachment_kb: int,
     unsafe: bool,
+    *,
+    start_n: int = 1,
 ) -> list[Attachment]:
     """
     For each path:
@@ -221,7 +223,7 @@ def resolve_attachments(
       2. If size > max_attachment_kb: print warning, continue.
       3. If not unsafe: prompt "You are about to attach <path>. Have you
          reviewed it for secrets? (y/n)". If 'n': raise AttachmentAborted.
-      4. Read content, assign identifier CONTEXT_<n>.
+      4. Read content, assign identifier CONTEXT_<n> starting from start_n.
     Returns list of Attachment objects.
     """
 
@@ -249,11 +251,14 @@ class ChatSession:
     history_token_budget: int   # mutable via /set
     _last_rag_chunks: list[Chunk]  # stored for /rag command
     resumed_context: str | None  # [RESUMED_CONTEXT] system message body, set at resume time
+    _next_attachment_n: int      # session-global counter for CONTEXT_<n> identifiers
 
     def process(self, user_input: str) -> str:
         """
         Full pipeline for one user turn:
-          1. Parse and resolve attachments; substitute identifiers in message.
+          1. Parse and resolve attachments (passing _next_attachment_n as start_n);
+             substitute identifiers in message.
+             Advance _next_attachment_n by len(attachments) on success only.
           2. Trim history to fit history_token_budget; note turns dropped.
           3. Query RAG store for top_k chunks.
           4. Assemble message list (see Section 5).
@@ -267,7 +272,7 @@ class ChatSession:
         """
         Close the current logger, open a new one with a fresh timestamp in
         config.log_folder, assign it to self.logger, and return the path of
-        the new JSONL file.
+        the new JSONL file. Also resets _next_attachment_n to 1.
         """
 
     def _trim_history(self) -> int:
@@ -348,6 +353,7 @@ class ResumedSession:
     resumed_context: str            # formatted [RESUMED_CONTEXT] system message body
     last_assistant_message: str     # for printing at startup
     jsonl_path: Path                # original path (for logger)
+    next_attachment_n: int          # max(N for CONTEXT_N in log) + 1; new attachments start here
 
 def load_resume(path: Path) -> ResumedSession:
     """
@@ -361,6 +367,8 @@ def load_resume(path: Path) -> ResumedSession:
       - Collects all unique attachments (by identifier) and RAG chunks across all turns.
       - Formats them into a single [RESUMED_CONTEXT] system message string.
       - Returns the last assistant message for startup display.
+      - Computes next_attachment_n as max(N for all CONTEXT_N identifiers found) + 1,
+        or 1 if no attachments were present.
     """
 ```
 
@@ -405,8 +413,9 @@ def handle_command(cmd: str, session: ChatSession) -> None:
     /set <param>=<value>  — update session.top_k or session.history_token_budget
     /rag                  — print session._last_rag_chunks
     /extract <path>       — write code blocks from last response to <path> (fence language inferred from extension)
-    /clear                — reset session.history, session._last_rag_chunks, and session.resumed_context;
-                            call session.rotate_logger(); print "Conversation history cleared. New session: <path>"
+    /clear                — reset session.history, session._last_rag_chunks, session.resumed_context,
+                            and session._next_attachment_n (to 1); call session.rotate_logger();
+                            print "Conversation history cleared. New session: <path>"
     /help                 — print command reference
     /exit                 — raise SystemExit
     """
@@ -445,7 +454,8 @@ def main() -> None:
     # 5. If --resume: call load_resume(path) — exits with error on failure
     #    Else: instantiate SessionLogger with fresh timestamp
     # 6. Build VectorStore (prints progress)
-    # 7. Instantiate ChatSession; if resuming, set session.history and resumed_context
+    # 7. Instantiate ChatSession; if resuming, set session.history, resumed_context,
+    #    and _next_attachment_n from ResumedSession.next_attachment_n
     # 8. If resuming: print "Resumed N turns from <path>" and "[last response]\n<msg>"
     # 9. run_repl(session)
     # 10. On exit: session.logger.close()

@@ -28,16 +28,18 @@ class ChatSession:
         self.history_token_budget: int = config.history_token_budget
         self._last_rag_chunks: list[Chunk] = []
         self.resumed_context: str | None = None
+        self._next_attachment_n: int = 1
 
     def process(self, user_input: str) -> tuple[str | None, int]:
         # 1. Attachments
         try:
             paths = parse_attachment_paths(user_input)
-            attachments = resolve_attachments(paths, self.config.max_attachment_kb, self.unsafe)
+            attachments = resolve_attachments(paths, self.config.max_attachment_kb, self.unsafe, start_n=self._next_attachment_n)
         except AttachmentAborted:
             print("[message cancelled]")
             return None, 0
 
+        self._next_attachment_n += len(attachments)
         message = substitute_identifiers(user_input, attachments)
 
         # 2. Trim history
@@ -62,6 +64,7 @@ class ChatSession:
         self.logger.close()
         timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         self.logger = SessionLogger(self.config.log_folder, timestamp)
+        self._next_attachment_n = 1
         return self.config.log_folder / f"chat_{timestamp}.jsonl"
 
     def _trim_history(self) -> int:

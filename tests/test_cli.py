@@ -190,7 +190,7 @@ def test_resume_flag_uses_from_existing_logger(config_file, resume_log):
             with patch("pmca.cli.SessionLogger") as MockLogger:
                 with patch("pmca.cli.load_resume") as mock_lr:
                     mock_lr.return_value = ResumedSession(
-                        history=[], resumed_context="", last_assistant_message="hi", jsonl_path=resume_log
+                        history=[], resumed_context="", last_assistant_message="hi", jsonl_path=resume_log, next_attachment_n=1
                     )
                     _run(["pmca", str(config_file), "--resume", str(resume_log)])
 

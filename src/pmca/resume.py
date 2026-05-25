@@ -15,6 +15,7 @@ class ResumedSession:
     resumed_context: str
     last_assistant_message: str
     jsonl_path: Path
+    next_attachment_n: int
 
 
 def load_resume(path: Path) -> ResumedSession:
@@ -53,12 +54,14 @@ def load_resume(path: Path) -> ResumedSession:
     )
 
     resumed_context = _build_resumed_context(entries)
+    next_attachment_n = _compute_next_attachment_n(entries)
 
     return ResumedSession(
         history=history,
         resumed_context=resumed_context,
         last_assistant_message=last_assistant,
         jsonl_path=path,
+        next_attachment_n=next_attachment_n,
     )
 
 
@@ -93,3 +96,17 @@ def _build_resumed_context(entries: list[dict]) -> str:
     parts.extend(att_blocks)
     parts.extend(rag_blocks)
     return "\n\n".join(parts)
+
+
+def _compute_next_attachment_n(entries: list[dict]) -> int:
+    max_n = 0
+    for entry in entries:
+        for att in entry.get("attachments", []):
+            ident = att.get("identifier", "")
+            if ident.startswith("CONTEXT_"):
+                try:
+                    n = int(ident[len("CONTEXT_"):])
+                    max_n = max(max_n, n)
+                except ValueError:
+                    pass
+    return max_n + 1

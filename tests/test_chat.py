@@ -244,6 +244,49 @@ def test_process_does_not_append_history_on_abort():
 
 
 # ---------------------------------------------------------------------------
+# process() — attachment counter
+# ---------------------------------------------------------------------------
+
+def test_next_attachment_n_advances_after_successful_turn(tmp_path):
+    session, store, _ = _make_session()
+    att1 = _attachment("CONTEXT_1")
+    att2 = _attachment("CONTEXT_2")
+
+    with patch("pmca.chat.chat_completion", return_value="r"):
+        with patch("pmca.chat.parse_attachment_paths", return_value=[att1.path, att2.path]):
+            with patch("pmca.chat.resolve_attachments", return_value=[att1, att2]):
+                with patch("pmca.chat.substitute_identifiers", return_value="hi"):
+                    session.process("hi")
+
+    assert session._next_attachment_n == 3
+
+
+def test_next_attachment_n_passes_to_resolve_attachments(tmp_path):
+    session, store, _ = _make_session()
+    session._next_attachment_n = 5
+    att = _attachment("CONTEXT_5")
+
+    with patch("pmca.chat.chat_completion", return_value="r"):
+        with patch("pmca.chat.parse_attachment_paths", return_value=[att.path]):
+            with patch("pmca.chat.resolve_attachments", return_value=[att]) as mock_resolve:
+                with patch("pmca.chat.substitute_identifiers", return_value="hi"):
+                    session.process("hi")
+
+    mock_resolve.assert_called_once_with([att.path], session.config.max_attachment_kb, session.unsafe, start_n=5)
+
+
+def test_next_attachment_n_does_not_advance_on_abort(tmp_path):
+    session, store, _ = _make_session()
+    from pmca.attachments import AttachmentAborted
+
+    with patch("pmca.chat.parse_attachment_paths", return_value=[Path("/f.py")]):
+        with patch("pmca.chat.resolve_attachments", side_effect=AttachmentAborted()):
+            session.process("hi")
+
+    assert session._next_attachment_n == 1
+
+
+# ---------------------------------------------------------------------------
 # process() — return value
 # ---------------------------------------------------------------------------
 
@@ -385,6 +428,16 @@ def test_rotate_logger_assigns_new_logger():
             mock_dt.now.return_value.strftime.return_value = "2026-05-24_12-00-01"
             session.rotate_logger()
     assert session.logger is MockLogger.return_value
+
+
+def test_rotate_logger_resets_next_attachment_n():
+    session, _, _ = _make_session()
+    session._next_attachment_n = 7
+    with patch("pmca.chat.SessionLogger"):
+        with patch("pmca.chat.datetime") as mock_dt:
+            mock_dt.now.return_value.strftime.return_value = "2026-05-24_12-00-00"
+            session.rotate_logger()
+    assert session._next_attachment_n == 1
 
 
 def test_rotate_logger_returns_new_jsonl_path():

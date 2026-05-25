@@ -116,7 +116,7 @@ Implement `SessionLogger.__init__`, `log_exchange`, `log_debug`, `close`.
 - Raises `AttachmentError` for a non-absolute path (e.g. `[[./relative.py]]`)
 - `resolve_attachments()` raises `AttachmentError` when the file does not exist
 - `resolve_attachments()` sets `size_warning=True` when file exceeds `max_attachment_kb`
-- `resolve_attachments()` assigns identifiers `CONTEXT_1`, `CONTEXT_2`, … in order
+- `resolve_attachments()` assigns identifiers `CONTEXT_1`, `CONTEXT_2`, … in order (default `start_n=1`)
 - In safe mode (not unsafe), prompts for confirmation; raises `AttachmentAborted` when user answers `n` — the caller (`ChatSession.process()`) catches this and cancels the entire message send, printing a notice to the user
 - In unsafe mode, skips the prompt entirely
 - `substitute_identifiers()` replaces `[[/abs/path/file.py]]` with `CONTEXT_1` in the message string
@@ -264,6 +264,51 @@ Apply the source changes listed above; all tests pass.
 
 ### Refactor
 None needed — changes are localised.
+
+---
+
+## Phase 20 — Continuous attachment numbering across turns
+
+**Why:** Testing revealed that `resolve_attachments` always starts identifiers at `CONTEXT_1`. In a multi-turn session, a file attached in turn 2 also gets `CONTEXT_1`, colliding with turn 1's attachment in the conversation history and confusing the model.
+
+### Red
+
+**`attachments.py`**
+- `resolve_attachments([a, b], ..., start_n=3)` assigns `CONTEXT_3` and `CONTEXT_4`
+- Default `start_n=1` behaviour is unchanged (existing tests continue to pass)
+
+**`chat.py`**
+- After turn 1 attaches 2 files, `_next_attachment_n` is 3
+- After turn 2 attaches 1 file, that file gets `CONTEXT_3` and `_next_attachment_n` is 4
+- `AttachmentAborted` or `AttachmentError` does not advance `_next_attachment_n`
+- `/clear` resets `_next_attachment_n` to 1 (alongside history and resumed_context)
+
+**`resume.py`**
+- `load_resume` on a log with `CONTEXT_1` and `CONTEXT_2` returns `next_attachment_n=3`
+- `load_resume` on a log with no attachments returns `next_attachment_n=1`
+
+**`cli.py`**
+- `--resume` initialises `session._next_attachment_n` from `ResumedSession.next_attachment_n`
+
+### Green
+
+**`attachments.py`**
+- Add `*, start_n: int = 1` keyword-only parameter to `resolve_attachments`; use `enumerate(paths, start=start_n)`
+
+**`chat.py`**
+- Add `self._next_attachment_n: int = 1` to `ChatSession.__init__`
+- In `process()`: pass `start_n=self._next_attachment_n` to `resolve_attachments`; after success advance `self._next_attachment_n += len(attachments)`
+- In `rotate_logger()`: reset `self._next_attachment_n = 1`
+
+**`resume.py`**
+- Add `next_attachment_n: int` field to `ResumedSession`
+- In `load_resume`: scan all `attachments[].identifier` fields, extract N from `CONTEXT_N` strings, set `next_attachment_n = max(Ns) + 1` (or 1 if none found)
+
+**`cli.py`**
+- After `load_resume`, set `session._next_attachment_n = resumed.next_attachment_n`
+
+### Refactor
+- None needed — changes are localised to four modules.
 
 ---
 

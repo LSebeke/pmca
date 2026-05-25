@@ -183,3 +183,30 @@ def test_load_resume_returns_jsonl_path(tmp_path):
     p = _minimal_log(tmp_path)
     result = load_resume(p)
     assert result.jsonl_path == p
+
+
+# ---------------------------------------------------------------------------
+# next_attachment_n
+# ---------------------------------------------------------------------------
+
+def test_load_resume_next_attachment_n_continues_from_max(tmp_path):
+    p = tmp_path / "chat_ts.jsonl"
+    _write_jsonl(p, [
+        {
+            "timestamp": "t", "role": "user", "content": "hi",
+            "rag_chunks": [],
+            "attachments": [
+                {"identifier": "CONTEXT_1", "path": "/a.py", "content": "x", "size_warning": False},
+                {"identifier": "CONTEXT_2", "path": "/b.py", "content": "y", "size_warning": False},
+            ],
+        },
+        {"timestamp": "t", "role": "assistant", "content": "ok"},
+    ])
+    result = load_resume(p)
+    assert result.next_attachment_n == 3
+
+
+def test_load_resume_next_attachment_n_is_1_when_no_attachments(tmp_path):
+    p = _minimal_log(tmp_path)
+    result = load_resume(p)
+    assert result.next_attachment_n == 1

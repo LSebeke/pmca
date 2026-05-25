@@ -58,6 +58,7 @@ def main() -> None:
         if resumed:
             session.history = resumed.history
             session.resumed_context = resumed.resumed_context or None
+            session._next_attachment_n = resumed.next_attachment_n
             turn_count = len(resumed.history) // 2
             print(f"Resumed {turn_count} turn(s) from {resumed.jsonl_path}")
             print(f"[last response]\n{resumed.last_assistant_message}")

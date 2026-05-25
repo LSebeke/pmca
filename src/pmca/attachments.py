@@ -33,10 +33,12 @@ def resolve_attachments(
     paths: list[Path],
     max_attachment_kb: int,
     unsafe: bool,
+    *,
+    start_n: int = 1,
 ) -> list[Attachment]:
     attachments: list[Attachment] = []
 
-    for i, path in enumerate(paths, start=1):
+    for i, path in enumerate(paths, start=start_n):
         if not path.exists():
             raise AttachmentError(f"Attachment not found: {path}")
 
