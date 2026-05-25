@@ -265,6 +265,7 @@ class ChatSession:
     session_attachments: list[Attachment]  # all attachments accumulated this session
     session_rag_chunks: list[Chunk]        # all RAG chunks accumulated this session (deduped)
     _next_attachment_n: int      # session-global counter for CONTEXT_<n> identifiers
+    _system_context: str         # computed once at __init__: datetime, OS, hostname, user, shell
 
     def process(self, user_input: str) -> str:
         """
@@ -488,6 +489,8 @@ Order sent to OpenAI on each turn:
 
 ```
 [system]  <session.system_prompt>
+
+[system]  <system_context>           ← datetime, OS, hostname, username, shell (computed at session start)
 
 [system]  <startup_doc 1>            ← one entry per startup doc, if any
 [system]  <startup_doc 2> ...

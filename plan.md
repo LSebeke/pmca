@@ -378,6 +378,39 @@ Apply all source changes listed above.
 
 ---
 
+## Phase 22 — System context injection
+
+**Why:** The LLM has no awareness of the current datetime or host environment. This phase injects a static system message at session start so the model can give accurate, environment-aware answers without requiring users to state the obvious.
+
+### What is injected
+
+A single system message computed once in `ChatSession.__init__` and stored as `_system_context`. It contains:
+- Current local datetime with UTC offset
+- OS name and version (`platform.system()`, `platform.version()`)
+- Hostname (`platform.node()`)
+- Username (`os.environ.get("USER") or getpass.getuser()`)
+- Shell (`os.environ.get("SHELL", "unknown")`)
+
+### Red
+
+**`chat.py`**
+- `ChatSession.__init__` computes `_system_context` from `datetime`, `platform`, `os`, `getpass`
+- `_build_messages` inserts a `{"role": "system", "content": _system_context}` entry immediately after the main system prompt, before startup docs
+- The system context message is present in every API call (including resumed sessions)
+
+### Green
+
+**`chat.py`**
+- Import `platform`, `getpass`, and `timezone` from stdlib
+- In `__init__`: `self._system_context = _build_system_context()`
+- Add module-level `_build_system_context() -> str` that assembles the context string
+- In `_build_messages`: insert `{"role": "system", "content": self._system_context}` after the main system prompt entry
+
+### Refactor
+- None needed — changes are contained to `chat.py`.
+
+---
+
 ## Phase 11 — Integration smoke test
 
 One end-to-end test with real files, mocked OpenAI API, and a real temp log directory:

@@ -41,6 +41,49 @@ def _make_session(config=None, *, unsafe=False):
 
 
 # ---------------------------------------------------------------------------
+# system context injection
+# ---------------------------------------------------------------------------
+
+def test_system_context_computed_once_at_init_not_per_call():
+    with patch("pmca.chat._build_system_context", return_value="[CTX]") as mock_build:
+        session, store, _ = _make_session()
+
+    assert mock_build.call_count == 1
+    assert session._system_context == "[CTX]"
+
+
+def test_system_context_content_includes_datetime_os_host_user_shell():
+    with patch("pmca.chat.platform.system", return_value="Linux"), \
+         patch("pmca.chat.platform.version", return_value="5.15.0"), \
+         patch("pmca.chat.platform.node", return_value="myhost"), \
+         patch.dict("pmca.chat.os.environ", {"USER": "alice", "SHELL": "/bin/bash"}):
+        session, store, _ = _make_session()
+
+    ctx = session._system_context
+    assert "Linux" in ctx
+    assert "5.15.0" in ctx
+    assert "myhost" in ctx
+    assert "alice" in ctx
+    assert "/bin/bash" in ctx
+    assert "Session started:" in ctx
+
+
+def test_system_context_is_second_system_message():
+    session, store, _ = _make_session()
+
+    with patch("pmca.chat.chat_completion", return_value="r") as mock_cc:
+        with patch("pmca.chat.parse_attachment_paths", return_value=[]):
+            session.process("hi")
+
+    messages = mock_cc.call_args[0][0]
+    assert messages[1]["role"] == "system"
+    assert "OS:" in messages[1]["content"]
+    assert "Host:" in messages[1]["content"]
+    assert "User:" in messages[1]["content"]
+    assert "Shell:" in messages[1]["content"]
+
+
+# ---------------------------------------------------------------------------
 # process() — RAG query
 # ---------------------------------------------------------------------------
 
@@ -91,9 +134,8 @@ def test_process_includes_rag_system_message_when_chunks_retrieved():
             session.process("hi")
 
     messages = mock_cc.call_args[0][0]
-    rag_msg = messages[1]
+    rag_msg = next(m for m in messages if "[RAG_1]" in m.get("content", ""))
     assert rag_msg["role"] == "system"
-    assert "[RAG_1]" in rag_msg["content"]
     assert "fn `foo`" in rag_msg["content"]
 
 
@@ -149,10 +191,10 @@ def test_startup_docs_appear_after_system_prompt_before_rag():
     messages = mock_cc.call_args[0][0]
     assert messages[0]["role"] == "system"
     assert messages[0]["content"] == "You are helpful."
-    assert "[STARTUP_DOC]" in messages[1]["content"]
-    assert "/fake/framework.md" in messages[1]["content"]
-    assert "# Framework" in messages[1]["content"]
-    assert "[RAG_1]" in messages[2]["content"]
+    assert "[STARTUP_DOC]" in messages[2]["content"]
+    assert "/fake/framework.md" in messages[2]["content"]
+    assert "# Framework" in messages[2]["content"]
+    assert "[RAG_1]" in messages[3]["content"]
 
 
 def test_each_startup_doc_is_separate_system_message():
@@ -200,9 +242,9 @@ def test_process_message_order_system_rag_attachment_history_user():
 
     messages = mock_cc.call_args[0][0]
     roles = [m["role"] for m in messages]
-    # system (base), system (session_attachments), system (session_rag_chunks),
+    # system (base), system (context), system (session_attachments), system (session_rag_chunks),
     # user (history), assistant (history), user (current)
-    assert roles == ["system", "system", "system", "user", "assistant", "user"]
+    assert roles == ["system", "system", "system", "system", "user", "assistant", "user"]
 
 
 def test_process_current_user_message_is_last():

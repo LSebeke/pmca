@@ -1,6 +1,9 @@
 from __future__ import annotations
 
-from datetime import datetime
+import getpass
+import os
+import platform
+from datetime import datetime, timezone
 from pathlib import Path
 
 from pmca.attachments import AttachmentAborted, parse_attachment_paths, resolve_attachments, substitute_identifiers
@@ -32,6 +35,7 @@ class ChatSession:
         self._next_attachment_n: int = 1
         self.session_attachments: list[Attachment] = []
         self.session_rag_chunks: list[Chunk] = []
+        self._system_context: str = _build_system_context()
 
     def process(self, user_input: str) -> tuple[str | None, int]:
         # 1. Attachments
@@ -92,6 +96,7 @@ class ChatSession:
         turn_attachments: list[Attachment],
     ) -> list[dict]:
         messages: list[dict] = [{"role": "system", "content": self.system_prompt}]
+        messages.append({"role": "system", "content": self._system_context})
 
         for path, content in self.startup_docs:
             messages.append({"role": "system", "content": _format_startup_doc(path, content)})
@@ -132,3 +137,14 @@ def _format_rag(chunks: list[Chunk]) -> str:
 def _format_attachment(att: Attachment) -> str:
     suffix = att.path.suffix.lstrip(".")
     return f"[{att.identifier}]\nFile: {att.path}\nType: {suffix}\n---\n{att.content}\n---"
+
+
+def _build_system_context() -> str:
+    now = datetime.now(timezone.utc).astimezone()
+    return (
+        f"Session started: {now.strftime('%Y-%m-%d %H:%M:%S %z')}\n"
+        f"OS: {platform.system()} {platform.version()}\n"
+        f"Host: {platform.node()}\n"
+        f"User: {os.environ.get('USER') or getpass.getuser()}\n"
+        f"Shell: {os.environ.get('SHELL', 'unknown')}"
+    )
