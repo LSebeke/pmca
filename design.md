@@ -42,6 +42,7 @@ class Config:
     top_k_chunks: int
     log_folder: Path
     write_allowed_dirs: list[Path] = field(default_factory=list)  # absolute paths; empty → write_file tool not registered
+    system_context_fields: list[str] = field(default_factory=list)  # empty by default → no system context injected
     max_attachment_kb: int = 500
     history_token_budget: int = 4000
     # OpenAI optional params (passed through as-is if set)
@@ -294,7 +295,7 @@ class ChatSession:
     session_attachments: list[Attachment]  # all attachments accumulated this session
     session_rag_chunks: list[Chunk]        # all RAG chunks accumulated this session (deduped)
     _next_attachment_n: int      # session-global counter for CONTEXT_<n> identifiers
-    _system_context: str         # computed once at __init__: datetime, OS, hostname, user, shell
+    _system_context: str | None  # computed once at __init__ from config.system_context_fields; None if list is empty
 
     def process(self, user_input: str) -> str:
         """
@@ -574,7 +575,8 @@ Order sent to OpenAI on each turn:
 ```
 [system]  <session.system_prompt>
 
-[system]  <system_context>           ← datetime, OS, hostname, username, shell (computed at session start)
+[system]  <system_context>           ← only present when config.system_context_fields is non-empty;
+                                     supported fields: "datetime", "os", "shell" (shell uses $SHELL on Unix, %COMSPEC% on Windows)
 
 [system]  <startup_doc 1>            ← one entry per startup doc, if any
 [system]  <startup_doc 2> ...

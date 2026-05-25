@@ -3,7 +3,7 @@ from unittest.mock import MagicMock, call, patch
 
 import pytest
 
-from pmca.chat import ChatSession
+from pmca.chat import ChatSession, _build_system_context
 from pmca.config import Config
 from pmca.types import Attachment, Chunk
 
@@ -41,7 +41,84 @@ def _make_session(config=None, *, unsafe=False):
 
 
 # ---------------------------------------------------------------------------
-# system context injection
+# _build_system_context
+# ---------------------------------------------------------------------------
+
+def test_build_system_context_empty_fields_returns_none():
+    assert _build_system_context([]) is None
+
+
+def test_build_system_context_unknown_only_returns_none():
+    assert _build_system_context(["bogus", "nope"]) is None
+
+
+def test_build_system_context_datetime_field():
+    result = _build_system_context(["datetime"])
+    assert result is not None
+    assert "Session started:" in result
+    assert "OS:" not in result
+    assert "Shell:" not in result
+
+
+def test_build_system_context_os_field():
+    import platform
+    result = _build_system_context(["os"])
+    assert result is not None
+    assert f"OS: {platform.system()}" in result
+    assert "Session started:" not in result
+    assert "Shell:" not in result
+
+
+def test_build_system_context_shell_field():
+    result = _build_system_context(["shell"])
+    assert result is not None
+    assert "Shell:" in result
+    assert "Session started:" not in result
+    assert "OS:" not in result
+
+
+def test_build_system_context_all_fields_in_order():
+    result = _build_system_context(["datetime", "os", "shell"])
+    assert result is not None
+    lines = result.splitlines()
+    assert lines[0].startswith("Session started:")
+    assert lines[1].startswith("OS:")
+    assert lines[2].startswith("Shell:")
+
+
+def test_build_system_context_order_fixed_regardless_of_input_order():
+    result = _build_system_context(["shell", "datetime", "os"])
+    assert result is not None
+    lines = result.splitlines()
+    assert lines[0].startswith("Session started:")
+    assert lines[1].startswith("OS:")
+    assert lines[2].startswith("Shell:")
+
+
+def test_build_system_context_mixed_known_and_unknown():
+    result = _build_system_context(["datetime", "unknown_field"])
+    assert result is not None
+    assert "Session started:" in result
+    assert "unknown_field" not in result
+
+
+def test_build_system_context_shell_uses_comspec_when_shell_absent(monkeypatch):
+    monkeypatch.delenv("SHELL", raising=False)
+    monkeypatch.setenv("COMSPEC", "C:\\Windows\\System32\\cmd.exe")
+    result = _build_system_context(["shell"])
+    assert "C:\\Windows\\System32\\cmd.exe" in result
+
+
+def test_build_system_context_shell_prefers_shell_over_comspec(monkeypatch):
+    monkeypatch.setenv("SHELL", "/usr/bin/zsh")
+    monkeypatch.setenv("COMSPEC", "cmd.exe")
+    result = _build_system_context(["shell"])
+    assert "/usr/bin/zsh" in result
+    assert "cmd.exe" not in result
+
+
+# ---------------------------------------------------------------------------
+# system context injection into messages
 # ---------------------------------------------------------------------------
 
 def test_system_context_computed_once_at_init_not_per_call():
@@ -52,24 +129,22 @@ def test_system_context_computed_once_at_init_not_per_call():
     assert session._system_context == "[CTX]"
 
 
-def test_system_context_content_includes_datetime_os_host_user_shell():
-    with patch("pmca.chat.platform.system", return_value="Linux"), \
-         patch("pmca.chat.platform.version", return_value="5.15.0"), \
-         patch("pmca.chat.platform.node", return_value="myhost"), \
-         patch.dict("pmca.chat.os.environ", {"USER": "alice", "SHELL": "/bin/bash"}):
-        session, store, _ = _make_session()
+def test_system_context_omitted_from_messages_when_fields_empty():
+    session, store, _ = _make_session()  # default: system_context_fields=[]
+    assert session._system_context is None
 
-    ctx = session._system_context
-    assert "Linux" in ctx
-    assert "5.15.0" in ctx
-    assert "myhost" in ctx
-    assert "alice" in ctx
-    assert "/bin/bash" in ctx
-    assert "Session started:" in ctx
+    with patch("pmca.chat.chat_completion", return_value="r") as mock_cc:
+        with patch("pmca.chat.parse_attachment_paths", return_value=[]):
+            session.process("hi")
+
+    messages = mock_cc.call_args[0][0]
+    assert all("Session started:" not in m.get("content", "") for m in messages)
+    assert all("OS:" not in m.get("content", "") for m in messages)
 
 
-def test_system_context_is_second_system_message():
-    session, store, _ = _make_session()
+def test_system_context_is_second_system_message_when_fields_set():
+    cfg = _config(system_context_fields=["datetime", "os", "shell"])
+    session, store, _ = _make_session(cfg)
 
     with patch("pmca.chat.chat_completion", return_value="r") as mock_cc:
         with patch("pmca.chat.parse_attachment_paths", return_value=[]):
@@ -77,9 +152,8 @@ def test_system_context_is_second_system_message():
 
     messages = mock_cc.call_args[0][0]
     assert messages[1]["role"] == "system"
+    assert "Session started:" in messages[1]["content"]
     assert "OS:" in messages[1]["content"]
-    assert "Host:" in messages[1]["content"]
-    assert "User:" in messages[1]["content"]
     assert "Shell:" in messages[1]["content"]
 
 
@@ -191,10 +265,11 @@ def test_startup_docs_appear_after_system_prompt_before_rag():
     messages = mock_cc.call_args[0][0]
     assert messages[0]["role"] == "system"
     assert messages[0]["content"] == "You are helpful."
-    assert "[STARTUP_DOC]" in messages[2]["content"]
-    assert "/fake/framework.md" in messages[2]["content"]
-    assert "# Framework" in messages[2]["content"]
-    assert "[RAG_1]" in messages[3]["content"]
+    # No system context injected (default system_context_fields=[]), so startup doc is messages[1]
+    assert "[STARTUP_DOC]" in messages[1]["content"]
+    assert "/fake/framework.md" in messages[1]["content"]
+    assert "# Framework" in messages[1]["content"]
+    assert "[RAG_1]" in messages[2]["content"]
 
 
 def test_each_startup_doc_is_separate_system_message():
@@ -242,9 +317,10 @@ def test_process_message_order_system_rag_attachment_history_user():
 
     messages = mock_cc.call_args[0][0]
     roles = [m["role"] for m in messages]
-    # system (base), system (context), system (session_attachments), system (session_rag_chunks),
+    # system (base), system (session_attachments), system (session_rag_chunks),
     # user (history), assistant (history), user (current)
-    assert roles == ["system", "system", "system", "system", "user", "assistant", "user"]
+    # No system context message — default system_context_fields=[]
+    assert roles == ["system", "system", "system", "user", "assistant", "user"]
 
 
 def test_process_current_user_message_is_last():

@@ -380,34 +380,46 @@ Apply all source changes listed above.
 
 ## Phase 22 — System context injection
 
-**Why:** The LLM has no awareness of the current datetime or host environment. This phase injects a static system message at session start so the model can give accurate, environment-aware answers without requiring users to state the obvious.
+**Why:** The LLM has no awareness of the current datetime or host environment. This phase optionally injects a static system message so the model can give environment-aware answers. All fields are opt-in — nothing is sent by default.
 
 ### What is injected
 
-A single system message computed once in `ChatSession.__init__` and stored as `_system_context`. It contains:
-- Current local datetime with UTC offset
-- OS name and version (`platform.system()`, `platform.version()`)
-- Hostname (`platform.node()`)
-- Username (`os.environ.get("USER") or getpass.getuser()`)
-- Shell (`os.environ.get("SHELL", "unknown")`)
+A single system message computed once in `ChatSession.__init__` and stored as `_system_context` (`None` when no fields are configured). Fields are controlled by `config.system_context_fields` (default: `[]`). Supported values:
+
+| Field value | Content added |
+|---|---|
+| `"datetime"` | `Session started: 2026-05-25 14:03:11 +0200` |
+| `"os"` | `OS: Linux` (from `platform.system()` only — no version string) |
+| `"shell"` | `Shell: /usr/bin/zsh` (from `$SHELL` on Unix; falls back to `%COMSPEC%` on Windows) |
+
+Unknown field values are silently ignored.
 
 ### Red
 
+**`config.py`**
+- `system_context_fields` defaults to `[]` when absent from YAML
+- Unknown values in the list are accepted without error (validated at build time, not load time)
+
 **`chat.py`**
-- `ChatSession.__init__` computes `_system_context` from `datetime`, `platform`, `os`, `getpass`
-- `_build_messages` inserts a `{"role": "system", "content": _system_context}` entry immediately after the main system prompt, before startup docs
-- The system context message is present in every API call (including resumed sessions)
+- `_system_context` is `None` when `config.system_context_fields` is empty → no system context message injected
+- `_system_context` contains only the lines for the configured fields, in the order: datetime, os, shell
+- `_build_messages` inserts the context message immediately after the main system prompt, before startup docs — only when `_system_context` is not `None`
 
 ### Green
 
+**`config.py`**
+- Add `system_context_fields: list[str]` field (default `[]`)
+- Parse from YAML `system_context_fields` key (optional)
+
 **`chat.py`**
-- Import `platform`, `getpass`, and `timezone` from stdlib
-- In `__init__`: `self._system_context = _build_system_context()`
-- Add module-level `_build_system_context() -> str` that assembles the context string
-- In `_build_messages`: insert `{"role": "system", "content": self._system_context}` after the main system prompt entry
+- Remove imports of `getpass` (no longer needed); keep `os` for shell detection
+- Shell detection: `os.environ.get('SHELL') or os.environ.get('COMSPEC', 'unknown')` — handles both Unix and Windows
+- In `__init__`: `self._system_context = _build_system_context(config.system_context_fields)`
+- Add module-level `_build_system_context(fields: list[str]) -> str | None` that builds the string from the field list, returning `None` if no recognised fields produce output
+- In `_build_messages`: only insert the context system message when `self._system_context is not None`
 
 ### Refactor
-- None needed — changes are contained to `chat.py`.
+- None needed — changes are contained to `config.py` and `chat.py`.
 
 ---
 

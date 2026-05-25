@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import getpass
 import os
 import platform
 from datetime import datetime, timezone
@@ -36,7 +35,7 @@ class ChatSession:
         self._next_attachment_n: int = 1
         self.session_attachments: list[Attachment] = []
         self.session_rag_chunks: list[Chunk] = []
-        self._system_context: str = _build_system_context()
+        self._system_context: str | None = _build_system_context(config.system_context_fields)
 
     def process(self, user_input: str) -> tuple[str | None, int]:
         # 1. Attachments
@@ -123,7 +122,8 @@ class ChatSession:
         turn_attachments: list[Attachment],
     ) -> list[dict]:
         messages: list[dict] = [{"role": "system", "content": self.system_prompt}]
-        messages.append({"role": "system", "content": self._system_context})
+        if self._system_context is not None:
+            messages.append({"role": "system", "content": self._system_context})
 
         for path, content in self.startup_docs:
             messages.append({"role": "system", "content": _format_startup_doc(path, content)})
@@ -166,12 +166,21 @@ def _format_attachment(att: Attachment) -> str:
     return f"[{att.identifier}]\nFile: {att.path}\nType: {suffix}\n---\n{att.content}\n---"
 
 
-def _build_system_context() -> str:
-    now = datetime.now(timezone.utc).astimezone()
-    return (
-        f"Session started: {now.strftime('%Y-%m-%d %H:%M:%S %z')}\n"
-        f"OS: {platform.system()} {platform.version()}\n"
-        f"Host: {platform.node()}\n"
-        f"User: {os.environ.get('USER') or getpass.getuser()}\n"
-        f"Shell: {os.environ.get('SHELL', 'unknown')}"
-    )
+_CONTEXT_ORDER = ("datetime", "os", "shell")
+
+
+def _build_system_context(fields: list[str]) -> str | None:
+    wanted = set(fields)
+    lines: list[str] = []
+    for field in _CONTEXT_ORDER:
+        if field not in wanted:
+            continue
+        if field == "datetime":
+            now = datetime.now(timezone.utc).astimezone()
+            lines.append(f"Session started: {now.strftime('%Y-%m-%d %H:%M:%S %z')}")
+        elif field == "os":
+            lines.append(f"OS: {platform.system()}")
+        elif field == "shell":
+            shell = os.environ.get("SHELL") or os.environ.get("COMSPEC", "unknown")
+            lines.append(f"Shell: {shell}")
+    return "\n".join(lines) if lines else None

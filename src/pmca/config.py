@@ -24,6 +24,7 @@ class Config:
     log_folder: Path
     startup_docs: list[tuple[Path, str]] = field(default_factory=list)
     write_allowed_dirs: list[Path] = field(default_factory=list)
+    system_context_fields: list[str] = field(default_factory=list)
     max_attachment_kb: int = 500
     history_token_budget: int = 4000
     temperature: float | None = None
@@ -56,6 +57,7 @@ def load_config(config_name: str) -> Config:
         log_folder=Path(data["log_folder"]).expanduser(),
         startup_docs=_load_startup_docs(data.get("startup_docs") or []),
         write_allowed_dirs=[Path(p).expanduser() for p in (data.get("write_allowed_dirs") or [])],
+        system_context_fields=list(data.get("system_context_fields") or []),
         max_attachment_kb=data.get("max_attachment_kb", 500),
         history_token_budget=data.get("history_token_budget", 4000),
         temperature=data.get("temperature"),

@@ -370,6 +370,33 @@ log_folder: ~/pmca_tilde_test_logs
 
 
 # ---------------------------------------------------------------------------
+# system_context_fields
+# ---------------------------------------------------------------------------
+
+def test_system_context_fields_defaults_to_empty_list(tmp_path):
+    rag_file = tmp_path / "code.py"
+    rag_file.write_text("x = 1")
+    log_folder = tmp_path / "logs"
+
+    cfg_path = write_yaml(tmp_path, "cfg.yaml", minimal_yaml(rag_file, log_folder))
+    cfg = load_config(str(cfg_path))
+
+    assert cfg.system_context_fields == []
+
+
+def test_system_context_fields_parsed_from_yaml(tmp_path):
+    rag_file = tmp_path / "code.py"
+    rag_file.write_text("x = 1")
+    log_folder = tmp_path / "logs"
+
+    yaml_content = minimal_yaml(rag_file, log_folder) + "system_context_fields:\n  - datetime\n  - os\n"
+    cfg_path = write_yaml(tmp_path, "cfg.yaml", yaml_content)
+    cfg = load_config(str(cfg_path))
+
+    assert cfg.system_context_fields == ["datetime", "os"]
+
+
+# ---------------------------------------------------------------------------
 # Unknown keys ignored
 # ---------------------------------------------------------------------------
 
