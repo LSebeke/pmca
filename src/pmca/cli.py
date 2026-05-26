@@ -65,7 +65,6 @@ def main() -> None:
             session.startup_docs = resumed.startup_docs
             session.history = resumed.history
             session.session_attachments = resumed.session_attachments
-            session.session_rag_chunks = resumed.session_rag_chunks
             session._next_attachment_n = resumed.next_attachment_n
             turn_count = len(resumed.history) // 2
             print(f"Resumed {turn_count} turn(s) from {resumed.jsonl_path}")

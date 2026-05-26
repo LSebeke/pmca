@@ -20,7 +20,6 @@ def _config(**overrides) -> Config:
         model="gpt-4o-mini",
         system_prompt="You are helpful.",
         rag_files=[],
-        top_k_chunks=3,
         log_folder=Path("/tmp/logs"),
     )
     defaults.update(overrides)

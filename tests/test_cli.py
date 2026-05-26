@@ -26,7 +26,6 @@ model: gpt-4o-mini
 system_prompt: "You are helpful."
 rag_files:
   - {rag}
-top_k_chunks: 3
 log_folder: {log_folder}
 """)
     return cfg
@@ -174,7 +173,7 @@ def test_resume_flag_loads_history_into_session(config_file, resume_log):
     ]
 
 
-def test_resume_flag_sets_session_attachments_and_rag_chunks(config_file, resume_log):
+def test_resume_flag_sets_session_attachments(config_file, resume_log):
     with patch("pmca.cli.VectorStore"):
         with patch("pmca.cli.run_repl"):
             with patch("pmca.cli.ChatSession") as MockSession:
@@ -182,7 +181,6 @@ def test_resume_flag_sets_session_attachments_and_rag_chunks(config_file, resume
 
     session = MockSession.return_value
     assert session.session_attachments == []
-    assert session.session_rag_chunks == []
 
 
 def test_resume_flag_uses_from_existing_logger(config_file, resume_log):
@@ -195,7 +193,6 @@ def test_resume_flag_uses_from_existing_logger(config_file, resume_log):
                         startup_docs=[],
                         history=[],
                         session_attachments=[],
-                        session_rag_chunks=[],
                         last_assistant_message="hi",
                         jsonl_path=resume_log,
                         next_attachment_n=1,

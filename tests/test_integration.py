@@ -61,7 +61,6 @@ model: gpt-4o-mini
 system_prompt: "You are a helpful assistant."
 rag_files:
   - {rag_file}
-top_k_chunks: 1
 log_folder: {log_folder}
 """)
     return {"config": cfg, "attachment": attachment_file, "log_folder": log_folder}
@@ -118,10 +117,8 @@ def test_full_session_writes_correct_jsonl_log(project, monkeypatch):
     assert "CONTEXT_1" in user_entry["content"]
     assert str(attachment) not in user_entry["content"]
 
-    # RAG chunks present on user entry
-    assert isinstance(user_entry["rag_chunks"], list)
-    assert len(user_entry["rag_chunks"]) >= 1
-    assert "greet" in user_entry["rag_chunks"][0]["label"]
+    # rag_chunks no longer stored on user entry (RAG is a tool call now)
+    assert "rag_chunks" not in user_entry
 
     # Attachment metadata on user entry
     assert len(user_entry["attachments"]) == 1
