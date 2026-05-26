@@ -7,6 +7,7 @@ import pytest
 
 from pmca.config import Config
 from pmca.tools import (
+    execute_edit_file,
     execute_get_definition,
     execute_list_dir,
     execute_read_file,
@@ -53,7 +54,7 @@ def test_get_tools_returns_all_tools_when_both_configured(tmp_path):
     tools = get_tools(cfg)
     assert tools is not None
     names = {t["function"]["name"] for t in tools}
-    assert names == {"write_file", "read_file", "list_dir", "search", "get_definition"}
+    assert names == {"write_file", "edit_file", "read_file", "list_dir", "search", "get_definition"}
 
 
 def test_get_tools_read_description_lists_allowed_dirs(tmp_path):
@@ -63,13 +64,20 @@ def test_get_tools_read_description_lists_allowed_dirs(tmp_path):
     assert str(tmp_path) in descs
 
 
-def test_get_tools_returns_list_when_dirs_configured(tmp_path):
+def test_get_tools_returns_write_tools_when_write_dirs_configured(tmp_path):
     cfg = _config(write_allowed_dirs=[tmp_path])
     tools = get_tools(cfg)
     assert tools is not None
-    assert len(tools) == 1
-    assert tools[0]["type"] == "function"
-    assert tools[0]["function"]["name"] == "write_file"
+    names = {t["function"]["name"] for t in tools}
+    assert names == {"write_file", "edit_file"}
+
+
+def test_get_tools_includes_edit_file_when_write_dirs_configured(tmp_path):
+    cfg = _config(write_allowed_dirs=[tmp_path])
+    tools = get_tools(cfg)
+    assert tools is not None
+    names = {t["function"]["name"] for t in tools}
+    assert "edit_file" in names
 
 
 def test_get_tools_description_lists_allowed_dirs(tmp_path):
@@ -286,6 +294,107 @@ def test_get_definition_includes_decorators(tmp_path):
     cfg = _config(read_allowed_dirs=[tmp_path])
     result = execute_get_definition({"path": str(f), "symbol": "decorated"}, cfg)
     assert "@staticmethod" in result
+
+
+# ---------------------------------------------------------------------------
+# execute_edit_file
+# ---------------------------------------------------------------------------
+
+def test_edit_file_returns_error_when_outside_allowed_dirs(tmp_path):
+    allowed = tmp_path / "allowed"
+    cfg = _config(write_allowed_dirs=[allowed])
+    args = {"path": str(tmp_path / "sneaky.py"), "old_string": "x", "new_string": "y", "description": "t"}
+    ok, msg = execute_edit_file(args, cfg)
+    assert ok is False
+    assert "outside allowed" in msg.lower()
+
+
+def test_edit_file_returns_error_when_file_not_found(tmp_path):
+    cfg = _config(write_allowed_dirs=[tmp_path])
+    args = {"path": str(tmp_path / "missing.py"), "old_string": "x", "new_string": "y", "description": "t"}
+    ok, msg = execute_edit_file(args, cfg)
+    assert ok is False
+    assert "not found" in msg.lower()
+
+
+def test_edit_file_returns_error_when_old_string_not_found(tmp_path):
+    f = tmp_path / "code.py"
+    f.write_text("x = 1\n")
+    cfg = _config(write_allowed_dirs=[tmp_path])
+    args = {"path": str(f), "old_string": "zzz_no_such_string", "new_string": "y", "description": "t"}
+    ok, msg = execute_edit_file(args, cfg)
+    assert ok is False
+    assert "not found" in msg.lower()
+
+
+def test_edit_file_returns_error_when_old_string_is_ambiguous(tmp_path):
+    f = tmp_path / "code.py"
+    f.write_text("x = 1\nx = 1\n")
+    cfg = _config(write_allowed_dirs=[tmp_path])
+    args = {"path": str(f), "old_string": "x = 1", "new_string": "y = 2", "description": "t"}
+    ok, msg = execute_edit_file(args, cfg)
+    assert ok is False
+    assert "ambiguous" in msg.lower()
+    assert "2" in msg
+
+
+def test_edit_file_prints_approval_prompt(tmp_path, capsys):
+    f = tmp_path / "code.py"
+    f.write_text("x = 1\n")
+    cfg = _config(write_allowed_dirs=[tmp_path])
+    args = {"path": str(f), "old_string": "x = 1", "new_string": "x = 2", "description": "increment x"}
+
+    with patch("builtins.input", return_value="n"):
+        execute_edit_file(args, cfg)
+
+    out = capsys.readouterr().out
+    assert str(f.resolve()) in out
+    assert "increment x" in out
+    assert "x = 1" in out
+    assert "x = 2" in out
+    assert "--- remove ---" in out
+    assert "--- insert ---" in out
+
+
+def test_edit_file_returns_denial_when_user_denies(tmp_path):
+    f = tmp_path / "code.py"
+    f.write_text("x = 1\n")
+    cfg = _config(write_allowed_dirs=[tmp_path])
+    args = {"path": str(f), "old_string": "x = 1", "new_string": "x = 2", "description": "t"}
+
+    with patch("builtins.input", return_value="n"):
+        ok, msg = execute_edit_file(args, cfg)
+
+    assert ok is False
+    assert "Edit denied by user" in msg
+    assert str(f.resolve()) in msg
+
+
+def test_edit_file_replaces_and_writes_on_approval(tmp_path):
+    f = tmp_path / "code.py"
+    f.write_text("x = 1\ny = 2\n")
+    cfg = _config(write_allowed_dirs=[tmp_path])
+    args = {"path": str(f), "old_string": "x = 1", "new_string": "x = 99", "description": "t"}
+
+    with patch("builtins.input", return_value="y"):
+        ok, msg = execute_edit_file(args, cfg)
+
+    assert ok is True
+    assert "Edited:" in msg
+    assert str(f.resolve()) in msg
+    assert f.read_text() == "x = 99\ny = 2\n"
+
+
+def test_edit_file_replaces_only_first_when_one_occurrence(tmp_path):
+    f = tmp_path / "code.py"
+    f.write_text("a = 1\nb = 2\n")
+    cfg = _config(write_allowed_dirs=[tmp_path])
+    args = {"path": str(f), "old_string": "a = 1", "new_string": "a = 42", "description": "t"}
+
+    with patch("builtins.input", return_value="y"):
+        execute_edit_file(args, cfg)
+
+    assert f.read_text() == "a = 42\nb = 2\n"
 
 
 # ---------------------------------------------------------------------------

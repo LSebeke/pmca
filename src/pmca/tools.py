@@ -25,6 +25,25 @@ _WRITE_FILE_SCHEMA = {
     },
 }
 
+_EDIT_FILE_SCHEMA = {
+    "type": "function",
+    "function": {
+        "name": "edit_file",
+        "description": "",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Absolute path of the file to edit."},
+                "old_string": {"type": "string", "description": "Exact text to find and replace. Must appear exactly once in the file."},
+                "new_string": {"type": "string", "description": "Text to replace old_string with."},
+                "description": {"type": "string", "description": "Short human-readable explanation of what is being changed and why."},
+            },
+            "required": ["path", "old_string", "new_string", "description"],
+            "additionalProperties": False,
+        },
+    },
+}
+
 _READ_FILE_SCHEMA = {
     "type": "function",
     "function": {
@@ -115,14 +134,20 @@ def get_tools(config: Config) -> list[dict] | None:
 
     if config.write_allowed_dirs:
         dirs_str = ", ".join(str(d) for d in config.write_allowed_dirs)
-        schema = {
+        tools.append({
             **_WRITE_FILE_SCHEMA,
             "function": {
                 **_WRITE_FILE_SCHEMA["function"],
                 "description": f"Write a file to disk. Allowed directories: {dirs_str}",
             },
-        }
-        tools.append(schema)
+        })
+        tools.append({
+            **_EDIT_FILE_SCHEMA,
+            "function": {
+                **_EDIT_FILE_SCHEMA["function"],
+                "description": f"Edit a file by replacing an exact string. old_string must appear exactly once. Allowed directories: {dirs_str}",
+            },
+        })
 
     if config.read_allowed_dirs:
         dirs_str = ", ".join(str(d) for d in config.read_allowed_dirs)
@@ -176,6 +201,54 @@ def execute_write_file(arguments: dict, config: Config) -> tuple[bool, str]:
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(content, encoding="utf-8")
     return True, f"Written: {target} ({size} bytes)"
+
+
+def execute_edit_file(arguments: dict, config: Config) -> tuple[bool, str]:
+    raw_path = arguments["path"]
+    old_string = arguments["old_string"]
+    new_string = arguments["new_string"]
+    reason = arguments.get("description", "")
+
+    target = Path(raw_path).resolve()
+
+    if not _is_allowed(target, config.write_allowed_dirs):
+        dirs_str = ", ".join(str(d) for d in config.write_allowed_dirs)
+        return False, f"Error: path {target} is outside allowed directories: {dirs_str}"
+
+    if not target.exists():
+        return False, f"Error: file not found: {target}"
+
+    try:
+        content = target.read_text(encoding="utf-8")
+    except OSError as e:
+        return False, f"Error reading {target}: {e}"
+
+    count = content.count(old_string)
+    if count == 0:
+        return False, f"Error: old_string not found in {target}"
+    if count > 1:
+        return False, f"Error: old_string is ambiguous ({count} occurrences) in {target}; provide more context"
+
+    print(f"[edit_file] {target}")
+    print(f"Reason: {reason}")
+    print("--- remove ---")
+    print(old_string)
+    print("--- insert ---")
+    print(new_string)
+    print("---")
+    print("Approve? [y/N] ", end="", flush=True)
+    answer = input()
+
+    if answer.strip().lower() != "y":
+        return False, f"Edit denied by user. Path: {target}"
+
+    new_content = content.replace(old_string, new_string, 1)
+    try:
+        target.write_text(new_content, encoding="utf-8")
+    except OSError as e:
+        return False, f"Error writing {target}: {e}"
+
+    return True, f"Edited: {target}"
 
 
 def execute_read_file(arguments: dict, config: Config) -> str:

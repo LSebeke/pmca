@@ -795,6 +795,7 @@ def test_process_second_api_call_includes_tool_result_messages(tmp_path):
     ("search",          "pmca.chat.execute_search",          "match at line 3"),
     ("get_definition",  "pmca.chat.execute_get_definition",  "def foo():\n    pass"),
     ("run_tests",       "pmca.chat.execute_run_tests",       (True, "3 passed")),
+    ("edit_file",       "pmca.chat.execute_edit_file",       (True, "Edited: /f.py")),
 ])
 def test_process_dispatches_read_tool(tmp_path, tool_name, executor_path, executor_result):
     from pmca.types import ToolCallRequest

@@ -376,7 +376,7 @@ Permanent errors: `AuthenticationError`, `BadRequestError`, other `APIStatusErro
 
 ### 4.8 `tools.py`
 
-**Responsibilities:** Define tool schemas and implement execution for `write_file`, `read_file`, `list_dir`, `search`, `get_definition`, and `run_tests`. All read tools are gated by `read_allowed_dirs`; writes are gated by `write_allowed_dirs`; test execution is gated by `test_dir`. Reads and test runs execute without user approval; writes require per-call approval.
+**Responsibilities:** Define tool schemas and implement execution for `write_file`, `edit_file`, `read_file`, `list_dir`, `search`, `get_definition`, and `run_tests`. All read tools are gated by `read_allowed_dirs`; writes are gated by `write_allowed_dirs`; test execution is gated by `test_dir`. Reads and test runs execute without user approval; writes require per-call approval.
 
 ```python
 def get_tools(config: Config) -> list[dict] | None:
@@ -411,6 +411,42 @@ def execute_write_file(arguments: dict, config: Config) -> tuple[bool, str]:
 
     On denial:
       - Return (False, "Write denied by user. Path: /full/path")
+    """
+
+def execute_edit_file(arguments: dict, config: Config) -> tuple[bool, str]:
+    """
+    Validate path against config.write_allowed_dirs, find old_string in the file,
+    and replace it with new_string after user approval.
+
+    Path validation:
+      - Resolve to absolute path (Path.resolve())
+      - Must be within one of config.write_allowed_dirs
+      - If invalid: return (False, "Error: path ... is outside allowed directories: ...")
+      - File must exist: if not, return (False, "Error: file not found: ...")
+
+    String matching:
+      - Count occurrences of old_string in file content
+      - If 0: return (False, "Error: old_string not found in <path>")
+      - If > 1: return (False, "Error: old_string is ambiguous (N occurrences) in <path>; provide more context")
+      - If exactly 1: proceed to approval prompt
+
+    Approval prompt format:
+      [edit_file] /full/resolved/path
+      Reason: <description>
+      --- remove ---
+      <old_string>
+      --- insert ---
+      <new_string>
+      ---
+      Approve? [y/N]
+
+    On approval:
+      - Replace the single occurrence of old_string with new_string
+      - Write back (UTF-8)
+      - Return (True, "Edited: /full/path")
+
+    On denial:
+      - Return (False, "Edit denied by user. Path: /full/path")
     """
 
 def execute_read_file(arguments: dict, config: Config) -> str:
@@ -778,6 +814,12 @@ Key bindings:
 | write_file path outside allowed dirs | Tool returns error string to model; user is not prompted |
 | User denies write_file | Tool returns `"Write denied by user. Path: ..."` to model; session continues |
 | write_file I/O error (e.g. permission denied) | Tool returns error string to model; session continues |
+| edit_file path outside allowed dirs | Tool returns error string to model; user is not prompted |
+| edit_file file not found | Tool returns error string to model; user is not prompted |
+| edit_file old_string not found | Tool returns error string to model; user is not prompted |
+| edit_file old_string appears multiple times | Tool returns error string (with count) to model; user is not prompted |
+| User denies edit_file | Tool returns `"Edit denied by user. Path: ..."` to model; session continues |
+| edit_file I/O error | Tool returns error string to model; session continues |
 | read_file/list_dir/search/get_definition — path outside read_allowed_dirs | Tool returns error string to model; no user prompt |
 | read_file file not found or I/O error | Tool returns error string to model; session continues |
 | get_definition file not found, not a .py file, or parse error | Tool returns error string to model; session continues |

@@ -11,6 +11,7 @@ from pmca.logger import SessionLogger
 from pmca.openai_client import chat_completion
 from pmca.rag.store import VectorStore
 from pmca.tools import (
+    execute_edit_file,
     execute_get_definition,
     execute_list_dir,
     execute_read_file,
@@ -199,6 +200,8 @@ def _dispatch_tool(response: "ToolCallRequest", config: "Config") -> tuple[bool,
     args = response.arguments
     if name == "write_file":
         return execute_write_file(args, config)
+    if name == "edit_file":
+        return execute_edit_file(args, config)
     if name == "read_file":
         return True, execute_read_file(args, config)
     if name == "list_dir":

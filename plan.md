@@ -620,6 +620,50 @@ Apply all source changes listed above.
 
 ---
 
+## Phase 26 — `edit_file` tool
+
+**Why here:** Builds on stable `tools.py` and `chat.py`. Adds targeted string-replacement editing alongside `write_file`, gated by the same `write_allowed_dirs` config. Requires user approval like `write_file`.
+
+### Changes across modules
+
+**`tools.py`**
+- Add `_EDIT_FILE_SCHEMA` — schema with `path`, `old_string`, `new_string`, `description` (all required strings)
+- `get_tools()`: include `edit_file` schema alongside `write_file` when `write_allowed_dirs` is non-empty
+- `execute_edit_file(arguments, config) -> tuple[bool, str]`:
+  - Validate path is within `write_allowed_dirs`; return error if not
+  - Return error if file does not exist
+  - Count occurrences of `old_string` in file content; return error if 0 or > 1
+  - Print approval prompt showing path, reason, old string, and new string; read `[y/N]`
+  - On approval: replace the single occurrence, write back UTF-8, return `(True, "Edited: /full/path")`
+  - On denial: return `(False, "Edit denied by user. Path: /full/path")`
+
+**`chat.py`**
+- `_dispatch_tool`: add `edit_file` case → `execute_edit_file(args, config)`
+
+### Red
+
+**`tools.py`**
+- `get_tools` includes `edit_file` schema when `write_allowed_dirs` is non-empty
+- `execute_edit_file` returns error when path is outside allowed dirs (no prompt)
+- `execute_edit_file` returns error when file does not exist (no prompt)
+- `execute_edit_file` returns error when `old_string` is not found
+- `execute_edit_file` returns error (with occurrence count) when `old_string` appears more than once
+- `execute_edit_file` prints approval prompt with path, reason, `--- remove ---` / `--- insert ---` blocks
+- `execute_edit_file` returns denial string when user inputs anything other than `y`
+- `execute_edit_file` replaces exactly one occurrence and writes file on approval; returns `"Edited: /full/path"`
+- `execute_edit_file` returns error string on I/O error without crashing
+
+**`chat.py`**
+- Tool loop dispatches `edit_file` to `execute_edit_file`
+
+### Green
+Apply all source changes listed above.
+
+### Refactor
+- None needed — changes are localised to two modules.
+
+---
+
 ## Phase 11 — Integration smoke test
 
 One end-to-end test with real files, mocked OpenAI API, and a real temp log directory:
