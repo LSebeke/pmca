@@ -10,6 +10,7 @@ from pmca.tools import (
     execute_get_definition,
     execute_list_dir,
     execute_read_file,
+    execute_run_tests,
     execute_search,
     execute_write_file,
     get_tools,
@@ -414,3 +415,140 @@ def test_execute_creates_parent_directories(tmp_path):
 
     assert approved is True
     assert target.exists()
+
+
+# ---------------------------------------------------------------------------
+# get_tools — run_tests registration
+# ---------------------------------------------------------------------------
+
+def test_get_tools_includes_run_tests_when_test_dir_configured(tmp_path):
+    cfg = _config(test_dir=tmp_path)
+    tools = get_tools(cfg)
+    assert tools is not None
+    names = {t["function"]["name"] for t in tools}
+    assert "run_tests" in names
+
+
+def test_get_tools_excludes_run_tests_when_test_dir_is_none():
+    cfg = _config()
+    assert cfg.test_dir is None
+    tools = get_tools(cfg)
+    assert tools is None  # no tools at all when nothing configured
+
+
+def test_get_tools_run_tests_has_optional_filter_parameter(tmp_path):
+    cfg = _config(test_dir=tmp_path)
+    tools = get_tools(cfg)
+    schema = next(t for t in tools if t["function"]["name"] == "run_tests")
+    params = schema["function"]["parameters"]
+    assert "filter" in params["properties"]
+    assert "filter" not in params.get("required", [])
+
+
+# ---------------------------------------------------------------------------
+# execute_run_tests — command detection
+# ---------------------------------------------------------------------------
+
+def test_run_tests_uses_pixi_when_pixi_toml_present(tmp_path, capsys):
+    (tmp_path / "pixi.toml").write_text("")
+    cfg = _config(test_dir=tmp_path)
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value.stdout = "1 passed"
+        mock_run.return_value.returncode = 0
+        execute_run_tests({}, cfg)
+    cmd = mock_run.call_args[0][0]
+    assert cmd[:3] == ["pixi", "run", "pytest"]
+
+
+def test_run_tests_uses_pytest_when_no_pixi_toml(tmp_path, capsys):
+    cfg = _config(test_dir=tmp_path)
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value.stdout = "1 passed"
+        mock_run.return_value.returncode = 0
+        execute_run_tests({}, cfg)
+    cmd = mock_run.call_args[0][0]
+    assert cmd[0] == "pytest"
+    assert "pixi" not in cmd
+
+
+# ---------------------------------------------------------------------------
+# execute_run_tests — filter appended
+# ---------------------------------------------------------------------------
+
+def test_run_tests_appends_filter_tokens(tmp_path):
+    cfg = _config(test_dir=tmp_path)
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value.stdout = "1 passed"
+        mock_run.return_value.returncode = 0
+        execute_run_tests({"filter": "tests/test_foo.py -k bar"}, cfg)
+    cmd = mock_run.call_args[0][0]
+    assert "tests/test_foo.py" in cmd
+    assert "-k" in cmd
+    assert "bar" in cmd
+
+
+def test_run_tests_no_extra_tokens_when_filter_absent(tmp_path):
+    cfg = _config(test_dir=tmp_path)
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value.stdout = "passed"
+        mock_run.return_value.returncode = 0
+        execute_run_tests({}, cfg)
+    cmd = mock_run.call_args[0][0]
+    assert cmd == ["pytest"]
+
+
+# ---------------------------------------------------------------------------
+# execute_run_tests — prints command, returns output
+# ---------------------------------------------------------------------------
+
+def test_run_tests_prints_command_before_running(tmp_path, capsys):
+    cfg = _config(test_dir=tmp_path)
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value.stdout = "passed"
+        mock_run.return_value.returncode = 0
+        execute_run_tests({}, cfg)
+    out = capsys.readouterr().out
+    assert "[run_tests]" in out
+    assert "pytest" in out
+
+
+def test_run_tests_returns_true_and_output_on_pass(tmp_path):
+    cfg = _config(test_dir=tmp_path)
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value.stdout = "3 passed"
+        mock_run.return_value.returncode = 0
+        ok, result = execute_run_tests({}, cfg)
+    assert ok is True
+    assert "3 passed" in result
+
+
+def test_run_tests_returns_true_and_output_on_test_failure(tmp_path):
+    cfg = _config(test_dir=tmp_path)
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value.stdout = "1 failed, 2 passed"
+        mock_run.return_value.returncode = 1
+        ok, result = execute_run_tests({}, cfg)
+    assert ok is True
+    assert "1 failed" in result
+
+
+# ---------------------------------------------------------------------------
+# execute_run_tests — timeout and OSError
+# ---------------------------------------------------------------------------
+
+def test_run_tests_returns_false_on_timeout(tmp_path):
+    import subprocess
+    cfg = _config(test_dir=tmp_path, test_timeout=5)
+    with patch("subprocess.run", side_effect=subprocess.TimeoutExpired(cmd="pytest", timeout=5)):
+        ok, result = execute_run_tests({}, cfg)
+    assert ok is False
+    assert "timed out" in result.lower()
+    assert "5" in result
+
+
+def test_run_tests_returns_false_on_oserror(tmp_path):
+    cfg = _config(test_dir=tmp_path)
+    with patch("subprocess.run", side_effect=OSError("no such file")):
+        ok, result = execute_run_tests({}, cfg)
+    assert ok is False
+    assert "error" in result.lower()

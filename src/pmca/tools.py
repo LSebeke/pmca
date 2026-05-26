@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 import re
+import subprocess
 from pathlib import Path
 
 from pmca.config import Config
@@ -75,6 +76,22 @@ _SEARCH_SCHEMA = {
     },
 }
 
+_RUN_TESTS_SCHEMA = {
+    "type": "function",
+    "function": {
+        "name": "run_tests",
+        "description": "",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "filter": {"type": "string", "description": "Optional pytest filter: a test file path, a -k expression, or both (e.g. 'tests/test_foo.py -k bar')."},
+            },
+            "required": [],
+            "additionalProperties": False,
+        },
+    },
+}
+
 _GET_DEFINITION_SCHEMA = {
     "type": "function",
     "function": {
@@ -121,6 +138,15 @@ def get_tools(config: Config) -> list[dict] | None:
                 **base_schema,
                 "function": {**base_schema["function"], "description": desc},
             })
+
+    if config.test_dir is not None:
+        tools.append({
+            **_RUN_TESTS_SCHEMA,
+            "function": {
+                **_RUN_TESTS_SCHEMA["function"],
+                "description": f"Run the test suite in {config.test_dir}. Pass an optional filter (file path or -k expression).",
+            },
+        })
 
     return tools if tools else None
 
@@ -262,6 +288,34 @@ def execute_get_definition(arguments: dict, config: Config) -> str:
                     return f"Error: symbol '{symbol}' not found in {target}"
 
     return f"Error: symbol '{parts[0]}' not found in {target}"
+
+
+def execute_run_tests(arguments: dict, config: Config) -> tuple[bool, str]:
+    test_dir = config.test_dir
+    use_pixi = (test_dir / "pixi.toml").exists()
+    cmd = ["pixi", "run", "pytest"] if use_pixi else ["pytest"]
+
+    raw_filter = arguments.get("filter", "").strip()
+    if raw_filter:
+        cmd.extend(raw_filter.split())
+
+    print(f"[run_tests] {' '.join(cmd)}")
+
+    try:
+        result = subprocess.run(
+            cmd,
+            cwd=test_dir,
+            capture_output=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            timeout=config.test_timeout,
+        )
+        return True, result.stdout
+    except subprocess.TimeoutExpired:
+        return False, f"Error: run_tests timed out after {config.test_timeout} seconds"
+    except OSError as e:
+        return False, f"Error: {e}"
 
 
 # ---------------------------------------------------------------------------

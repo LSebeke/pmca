@@ -562,6 +562,64 @@ Apply all source changes listed above.
 
 ---
 
+## Phase 25 — `run_tests` tool
+
+**Why here:** Builds on stable `config.py`, `tools.py`, `chat.py`, and `repl.py`. Adds opt-in test execution gated by `test_dir` in the config YAML, completing the tools needed for a red-green-refactor loop.
+
+### Changes across modules
+
+**`config.py`**
+- Add `test_dir: Path | None = None` field — absolute path; `None` → `run_tests` tool not registered
+- Add `test_timeout: int = 60` field — seconds before the subprocess is killed
+- Validate: if `test_dir` is set, it must be an absolute path; existence not required at load time
+
+**`tools.py`**
+- Add `_RUN_TESTS_SCHEMA` — schema with a single optional `filter` string parameter
+- `get_tools()`: include `run_tests` when `config.test_dir` is not `None`
+- `execute_run_tests(arguments, config)`: auto-detect command (`pixi run pytest` if `pixi.toml` exists in `test_dir`, else `pytest`); append filter tokens if provided; print `[run_tests] <command>` to stdout; run subprocess with combined stdout+stderr, `cwd=config.test_dir`, `timeout=config.test_timeout`; return `(True, output)` on success or pytest failure; return `(False, "Error: ...")` on timeout or `OSError`
+
+**`chat.py`**
+- `_dispatch_tool`: add `run_tests` case → `execute_run_tests(args, config)`
+
+**`repl.py`**
+- `/set test_timeout=N` handler: validate N > 0; set `session.config.test_timeout = N`; print confirmation
+- `/help` output: add `/set test_timeout=N`
+
+### Red
+
+**`config.py`**
+- `test_dir` defaults to `None` when absent from YAML
+- `test_timeout` defaults to `60` when absent from YAML
+- Raises `ConfigError` when `test_dir` is set but non-absolute
+
+**`tools.py`**
+- `get_tools` includes `run_tests` schema when `test_dir` is configured; absent when `test_dir` is `None`
+- `execute_run_tests` uses `pixi run pytest` when `pixi.toml` is present in `test_dir`
+- `execute_run_tests` uses `pytest` when no `pixi.toml` is present
+- `execute_run_tests` appends filter tokens when `filter` argument is provided
+- `execute_run_tests` prints `[run_tests] <command>` to stdout before running
+- `execute_run_tests` returns `(True, output)` when pytest exits 0 (all pass)
+- `execute_run_tests` returns `(True, output)` when pytest exits non-zero (failures) — output contains the failure details
+- `execute_run_tests` returns `(False, "Error: run_tests timed out after N seconds")` on timeout
+- `execute_run_tests` returns `(False, "Error: ...")` on `OSError`
+
+**`chat.py`**
+- Tool loop dispatches `run_tests` to `execute_run_tests`
+
+**`repl.py`**
+- `/set test_timeout=60` sets `session.config.test_timeout` to 60
+- `/set test_timeout=0` prints an error and leaves `test_timeout` unchanged
+- `/set test_timeout=-1` prints an error and leaves `test_timeout` unchanged
+- `/help` includes `/set test_timeout=N`
+
+### Green
+Apply all source changes listed above.
+
+### Refactor
+- None needed — changes are localised to four modules.
+
+---
+
 ## Phase 11 — Integration smoke test
 
 One end-to-end test with real files, mocked OpenAI API, and a real temp log directory:

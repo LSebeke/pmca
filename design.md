@@ -44,6 +44,8 @@ class Config:
     write_allowed_dirs: list[Path] = field(default_factory=list)  # absolute paths; empty → write_file tool not registered
     read_allowed_dirs: list[Path] = field(default_factory=list)   # absolute paths; empty → read_file/list_dir/search tools not registered
     system_context_fields: list[str] = field(default_factory=list)  # empty by default → no system context injected
+    test_dir: Path | None = None          # absolute path; None → run_tests tool not registered
+    test_timeout: int = 60                # seconds before run_tests is killed
     max_attachment_kb: int = 500
     history_token_budget: int = 4000
     # OpenAI optional params (passed through as-is if set)
@@ -374,7 +376,7 @@ Permanent errors: `AuthenticationError`, `BadRequestError`, other `APIStatusErro
 
 ### 4.8 `tools.py`
 
-**Responsibilities:** Define tool schemas and implement execution for `write_file`, `read_file`, `list_dir`, and `search`. All read tools are gated by `read_allowed_dirs`; writes are gated by `write_allowed_dirs`. Reads execute silently; writes require per-call user approval.
+**Responsibilities:** Define tool schemas and implement execution for `write_file`, `read_file`, `list_dir`, `search`, `get_definition`, and `run_tests`. All read tools are gated by `read_allowed_dirs`; writes are gated by `write_allowed_dirs`; test execution is gated by `test_dir`. Reads and test runs execute without user approval; writes require per-call approval.
 
 ```python
 def get_tools(config: Config) -> list[dict] | None:
@@ -453,6 +455,30 @@ def execute_get_definition(arguments: dict, config: Config) -> str:
     Returns the full source text on success.
     Returns an error string if path is outside allowed dirs, not a .py file,
     file not found, symbol not found, or parse error.
+    """
+
+def execute_run_tests(arguments: dict, config: Config) -> tuple[bool, str]:
+    """
+    Run the test suite in config.test_dir and return the full output.
+    arguments: {"filter": str}  — filter is optional; omit to run the full suite.
+
+    Command selection (checked once at call time):
+      - If pixi.toml exists in config.test_dir: ["pixi", "run", "pytest"]
+      - Otherwise: ["pytest"]
+    The optional filter string is appended as-is, split on whitespace
+    (e.g. "tests/test_tools.py -k my_test" → two extra argv tokens).
+
+    Before running, prints to stdout:
+      [run_tests] <full command string>
+    (e.g. "[run_tests] pixi run pytest tests/test_tools.py")
+
+    Runs subprocess with cwd=config.test_dir, captures stdout+stderr (combined),
+    timeout=config.test_timeout seconds.
+
+    Returns (True, combined_output) regardless of exit code — test failures are
+    not errors from the tool's perspective, the LLM reads the output.
+    Returns (False, "Error: run_tests timed out after N seconds") on timeout.
+    Returns (False, "Error: <msg>") on OSError (e.g. command not found).
     """
 ```
 
@@ -560,7 +586,7 @@ def run_repl(session: ChatSession) -> None:
 
 def handle_command(cmd: str, session: ChatSession) -> None:
     """
-    /set <param>=<value>  — update session.top_k or session.history_token_budget
+    /set <param>=<value>  — update session.top_k, session.history_token_budget, or session.config.test_timeout
     /rag                  — print session._last_rag_chunks
     /extract <path>       — write code blocks from last response to <path> (fence language inferred from extension)
     /clear                — reset session.history, session._last_rag_chunks, session.resumed_context,
@@ -720,6 +746,7 @@ History trimming is lazy: the first `session.process()` call runs `_trim_history
 | `/read remove <path>` | Remove a directory from `read_allowed_dirs` for this session (requires user approval) |
 | `/set chunksize=N` | Set top-k RAG retrieval count for this session |
 | `/set history_token_budget=N` | Set history token budget for this session |
+| `/set test_timeout=N` | Set test run timeout (seconds) for this session |
 | `/rag` | Print RAG chunks retrieved for the last query |
 | `/extract <path>` | Extract code blocks from the last response into `<path>`; fence language inferred from extension (`.py`, `.yaml`/`.yml`, `.json`, `.toml`, `.sh`) |
 | `/clear` | Clear conversation history, session_attachments, session_rag_chunks, and last RAG chunks; rotate to a new log file (writes fresh system_prompt + startup_doc entries); print new log path |
@@ -757,6 +784,10 @@ Key bindings:
 | search invalid regex pattern | Tool returns error string to model; session continues |
 | get_definition symbol not found | Tool returns error string to model; session continues |
 | /read add/remove — user denies | read_allowed_dirs unchanged; message printed to user |
+| run_tests — test_dir not configured | Tool returns error string to model |
+| run_tests — timeout exceeded | Tool returns `"Error: run_tests timed out after N seconds"` to model |
+| run_tests — subprocess error (e.g. command not found) | Tool returns error string to model; session continues |
+| /set test_timeout — non-positive value | Print error; leave test_timeout unchanged |
 | `--resume` file not found | Print error, exit before session starts |
 | `--resume` file has zero valid turns | Print error, exit before session starts |
 | `--resume` file has malformed lines | Print error with line numbers, exit before session starts |

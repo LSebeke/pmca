@@ -14,6 +14,7 @@ from pmca.tools import (
     execute_get_definition,
     execute_list_dir,
     execute_read_file,
+    execute_run_tests,
     execute_search,
     execute_write_file,
     get_tools,
@@ -206,4 +207,6 @@ def _dispatch_tool(response: "ToolCallRequest", config: "Config") -> tuple[bool,
         return True, execute_search(args, config)
     if name == "get_definition":
         return True, execute_get_definition(args, config)
+    if name == "run_tests":
+        return execute_run_tests(args, config)
     return False, f"Error: unknown tool '{name}'"

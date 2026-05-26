@@ -13,6 +13,7 @@ _HELP = """\
 Commands:
   /set chunksize=N            Set top-k RAG retrieval count for this session
   /set history_token_budget=N Set history token budget for this session
+  /set test_timeout=N         Set test run timeout in seconds for this session
   /read add <path>            Add a directory to read_allowed_dirs for this session
   /read remove <path>         Remove a directory from read_allowed_dirs for this session
   /rag                        Print RAG chunks retrieved for the last query
@@ -115,8 +116,11 @@ def _handle_set(arg: str, session: ChatSession) -> None:
     key = key.strip()
     attr = _SETTABLE.get(key)
 
-    if attr is None:
-        print(f"Error: unknown parameter '{key}'. Valid: {', '.join(_SETTABLE)}")
+    _CONFIG_SETTABLE = {"test_timeout"}
+
+    if attr is None and key not in _CONFIG_SETTABLE:
+        valid = ", ".join(list(_SETTABLE) + sorted(_CONFIG_SETTABLE))
+        print(f"Error: unknown parameter '{key}'. Valid: {valid}")
         return
 
     try:
@@ -129,7 +133,10 @@ def _handle_set(arg: str, session: ChatSession) -> None:
         print(f"Error: '{key}' must be a positive integer, got {value}")
         return
 
-    setattr(session, attr, value)
+    if key in _CONFIG_SETTABLE:
+        setattr(session.config, key, value)
+    else:
+        setattr(session, attr, value)
     print(f"{key} = {value}")
 
 

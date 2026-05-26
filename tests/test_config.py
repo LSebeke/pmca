@@ -436,3 +436,50 @@ def test_unknown_yaml_keys_are_ignored(tmp_path):
 
     cfg = load_config(str(cfg_path))
     assert cfg.name == "TestConfig"
+
+
+# ---------------------------------------------------------------------------
+# test_dir and test_timeout
+# ---------------------------------------------------------------------------
+
+def test_test_dir_defaults_to_none(tmp_path):
+    rag_file = tmp_path / "code.py"
+    rag_file.write_text("x = 1")
+    cfg_path = write_yaml(tmp_path, "c.yaml", minimal_yaml(rag_file, tmp_path / "logs"))
+    cfg = load_config(str(cfg_path))
+    assert cfg.test_dir is None
+
+
+def test_test_timeout_defaults_to_60(tmp_path):
+    rag_file = tmp_path / "code.py"
+    rag_file.write_text("x = 1")
+    cfg_path = write_yaml(tmp_path, "c.yaml", minimal_yaml(rag_file, tmp_path / "logs"))
+    cfg = load_config(str(cfg_path))
+    assert cfg.test_timeout == 60
+
+
+def test_test_dir_parsed_from_yaml(tmp_path):
+    rag_file = tmp_path / "code.py"
+    rag_file.write_text("x = 1")
+    yaml_content = minimal_yaml(rag_file, tmp_path / "logs") + f"test_dir: {tmp_path}\n"
+    cfg_path = write_yaml(tmp_path, "c.yaml", yaml_content)
+    cfg = load_config(str(cfg_path))
+    assert cfg.test_dir == tmp_path
+
+
+def test_test_timeout_parsed_from_yaml(tmp_path):
+    rag_file = tmp_path / "code.py"
+    rag_file.write_text("x = 1")
+    yaml_content = minimal_yaml(rag_file, tmp_path / "logs") + f"test_dir: {tmp_path}\ntest_timeout: 120\n"
+    cfg_path = write_yaml(tmp_path, "c.yaml", yaml_content)
+    cfg = load_config(str(cfg_path))
+    assert cfg.test_timeout == 120
+
+
+def test_test_dir_raises_when_non_absolute(tmp_path):
+    rag_file = tmp_path / "code.py"
+    rag_file.write_text("x = 1")
+    yaml_content = minimal_yaml(rag_file, tmp_path / "logs") + "test_dir: relative/path\n"
+    cfg_path = write_yaml(tmp_path, "c.yaml", yaml_content)
+    with pytest.raises(ConfigError):
+        load_config(str(cfg_path))

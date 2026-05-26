@@ -396,6 +396,41 @@ def test_help_mentions_read(capsys):
     assert "/read" in capsys.readouterr().out
 
 
+# ---------------------------------------------------------------------------
+# handle_command — /set test_timeout
+# ---------------------------------------------------------------------------
+
+def test_set_test_timeout_updates_config(capsys):
+    session = _session()
+    session.config = MagicMock()
+    session.config.test_timeout = 60
+    handle_command("/set test_timeout=120", session)
+    assert session.config.test_timeout == 120
+
+
+def test_set_test_timeout_zero_prints_error_and_leaves_unchanged(capsys):
+    session = _session()
+    session.config = MagicMock()
+    session.config.test_timeout = 60
+    handle_command("/set test_timeout=0", session)
+    assert session.config.test_timeout == 60
+    assert capsys.readouterr().out.strip()
+
+
+def test_set_test_timeout_negative_prints_error_and_leaves_unchanged(capsys):
+    session = _session()
+    session.config = MagicMock()
+    session.config.test_timeout = 60
+    handle_command("/set test_timeout=-5", session)
+    assert session.config.test_timeout == 60
+    assert capsys.readouterr().out.strip()
+
+
+def test_help_mentions_test_timeout(capsys):
+    handle_command("/help", _session())
+    assert "test_timeout" in capsys.readouterr().out
+
+
 def test_extract_unknown_extension_prints_error(tmp_path, capsys):
     session = _session(history=[{"role": "assistant", "content": "```text\nhello\n```"}])
     out = tmp_path / "out.txt"
