@@ -25,7 +25,7 @@ def _read_jsonl(path: Path) -> list[dict]:
 
 def test_log_exchange_writes_two_lines(tmp_path):
     logger = SessionLogger(tmp_path, "ts")
-    logger.log_exchange("Hello", "Hi there", [], [])
+    logger.log_exchange("Hello", "Hi there", [])
     logger.close()
 
     lines = _read_jsonl(tmp_path / "chat_ts.jsonl")
@@ -34,7 +34,7 @@ def test_log_exchange_writes_two_lines(tmp_path):
 
 def test_log_exchange_roles(tmp_path):
     logger = SessionLogger(tmp_path, "ts")
-    logger.log_exchange("Hello", "Hi there", [], [])
+    logger.log_exchange("Hello", "Hi there", [])
     logger.close()
 
     user, asst = _read_jsonl(tmp_path / "chat_ts.jsonl")
@@ -44,7 +44,7 @@ def test_log_exchange_roles(tmp_path):
 
 def test_log_exchange_content(tmp_path):
     logger = SessionLogger(tmp_path, "ts")
-    logger.log_exchange("user msg", "asst msg", [], [])
+    logger.log_exchange("user msg", "asst msg", [])
     logger.close()
 
     user, asst = _read_jsonl(tmp_path / "chat_ts.jsonl")
@@ -52,24 +52,19 @@ def test_log_exchange_content(tmp_path):
     assert asst["content"] == "asst msg"
 
 
-def test_user_entry_includes_rag_chunks(tmp_path):
-    chunk = _chunk(tmp_path)
+def test_user_entry_has_no_rag_chunks_field(tmp_path):
     logger = SessionLogger(tmp_path, "ts")
-    logger.log_exchange("msg", "resp", [chunk], [])
+    logger.log_exchange("msg", "resp", [])
     logger.close()
 
     user, _ = _read_jsonl(tmp_path / "chat_ts.jsonl")
-    assert "rag_chunks" in user
-    assert len(user["rag_chunks"]) == 1
-    assert user["rag_chunks"][0]["label"] == chunk.label
-    assert user["rag_chunks"][0]["content"] == chunk.content
-    assert "source" in user["rag_chunks"][0]
+    assert "rag_chunks" not in user
 
 
 def test_user_entry_includes_attachments(tmp_path):
     att = _attachment(tmp_path)
     logger = SessionLogger(tmp_path, "ts")
-    logger.log_exchange("msg", "resp", [], [att])
+    logger.log_exchange("msg", "resp", [att])
     logger.close()
 
     user, _ = _read_jsonl(tmp_path / "chat_ts.jsonl")
@@ -82,7 +77,7 @@ def test_user_entry_includes_attachments(tmp_path):
 def test_user_entry_attachment_includes_content(tmp_path):
     att = _attachment(tmp_path)
     logger = SessionLogger(tmp_path, "ts")
-    logger.log_exchange("msg", "resp", [], [att])
+    logger.log_exchange("msg", "resp", [att])
     logger.close()
 
     user, _ = _read_jsonl(tmp_path / "chat_ts.jsonl")
@@ -95,10 +90,10 @@ def test_user_entry_attachment_includes_content(tmp_path):
 
 def test_from_existing_appends_to_existing_jsonl(tmp_path):
     jsonl = tmp_path / "chat_ts.jsonl"
-    SessionLogger(tmp_path, "ts").log_exchange("first", "r1", [], [])
+    SessionLogger(tmp_path, "ts").log_exchange("first", "r1", [])
 
     logger2 = SessionLogger.from_existing(jsonl)
-    logger2.log_exchange("second", "r2", [], [])
+    logger2.log_exchange("second", "r2", [])
     logger2.close()
 
     lines = _read_jsonl(jsonl)
@@ -107,7 +102,7 @@ def test_from_existing_appends_to_existing_jsonl(tmp_path):
 
 def test_from_existing_infers_debug_log_path(tmp_path):
     jsonl = tmp_path / "chat_2025-01-01_12-00-00.jsonl"
-    SessionLogger(tmp_path, "2025-01-01_12-00-00").log_exchange("x", "y", [], [])
+    SessionLogger(tmp_path, "2025-01-01_12-00-00").log_exchange("x", "y", [])
 
     logger2 = SessionLogger.from_existing(jsonl)
     logger2.log_debug("resumed debug")
@@ -134,19 +129,18 @@ def test_from_existing_appends_to_existing_debug_log(tmp_path):
     assert "resumed entry" in content
 
 
-def test_assistant_entry_has_no_rag_or_attachments(tmp_path):
+def test_assistant_entry_has_no_attachments_field(tmp_path):
     logger = SessionLogger(tmp_path, "ts")
-    logger.log_exchange("msg", "resp", [_chunk(tmp_path)], [_attachment(tmp_path)])
+    logger.log_exchange("msg", "resp", [_attachment(tmp_path)])
     logger.close()
 
     _, asst = _read_jsonl(tmp_path / "chat_ts.jsonl")
-    assert "rag_chunks" not in asst
     assert "attachments" not in asst
 
 
 def test_entries_have_timestamp_field(tmp_path):
     logger = SessionLogger(tmp_path, "ts")
-    logger.log_exchange("msg", "resp", [], [])
+    logger.log_exchange("msg", "resp", [])
     logger.close()
 
     for entry in _read_jsonl(tmp_path / "chat_ts.jsonl"):
@@ -192,7 +186,7 @@ def test_log_session_start_no_startup_docs_writes_one_entry(tmp_path):
 
 def test_log_exchange_entries_have_type_exchange(tmp_path):
     logger = SessionLogger(tmp_path, "ts")
-    logger.log_exchange("hello", "hi", [], [])
+    logger.log_exchange("hello", "hi", [])
     logger.close()
 
     user, asst = _read_jsonl(tmp_path / "chat_ts.jsonl")
@@ -228,7 +222,7 @@ def test_log_debug_line_includes_timestamp(tmp_path):
 
 def test_jsonl_flushed_immediately(tmp_path):
     logger = SessionLogger(tmp_path, "ts")
-    logger.log_exchange("msg", "resp", [], [])
+    logger.log_exchange("msg", "resp", [])
     # no close() yet
     lines = _read_jsonl(tmp_path / "chat_ts.jsonl")
     assert len(lines) == 2
@@ -248,10 +242,10 @@ def test_log_flushed_immediately(tmp_path):
 # ---------------------------------------------------------------------------
 
 def test_second_logger_appends_not_overwrites(tmp_path):
-    SessionLogger(tmp_path, "ts").log_exchange("first", "r1", [], [])
+    SessionLogger(tmp_path, "ts").log_exchange("first", "r1", [])
     # don't close — simulate crash; reopen same files
     logger2 = SessionLogger(tmp_path, "ts")
-    logger2.log_exchange("second", "r2", [], [])
+    logger2.log_exchange("second", "r2", [])
     logger2.close()
 
     lines = _read_jsonl(tmp_path / "chat_ts.jsonl")

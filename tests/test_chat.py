@@ -15,7 +15,7 @@ from pmca.types import Attachment, Chunk
 def _config(**overrides) -> Config:
     defaults = dict(
         name="test", model="gpt-4o-mini", system_prompt="You are helpful.",
-        rag_files=[], top_k_chunks=3, log_folder=Path("/tmp/logs"),
+        rag_files=[], log_folder=Path("/tmp/logs"),
     )
     defaults.update(overrides)
     return Config(**defaults)
@@ -35,6 +35,7 @@ def _attachment(identifier: str = "CONTEXT_1") -> Attachment:
 def _make_session(config=None, *, unsafe=False):
     cfg = config or _config()
     store = MagicMock()
+    store._chunks = []
     store.query.return_value = []
     logger = MagicMock()
     return ChatSession(config=cfg, store=store, logger=logger, unsafe=unsafe), store, logger
@@ -158,30 +159,42 @@ def test_system_context_is_second_system_message_when_fields_set():
 
 
 # ---------------------------------------------------------------------------
-# process() — RAG query
+# process() — RAG is NOT auto-fired
 # ---------------------------------------------------------------------------
 
-def test_process_calls_store_query(capsys):
+def test_process_does_not_call_store_query_directly():
     session, store, _ = _make_session()
-    store.query.return_value = []
 
     with patch("pmca.chat.chat_completion", return_value="reply"):
         with patch("pmca.chat.parse_attachment_paths", return_value=[]):
             session.process("hello world")
 
-    store.query.assert_called_once_with("hello world", session.top_k)
+    store.query.assert_not_called()
 
 
-def test_process_stores_rag_chunks(capsys):
+def test_turn_seen_chunks_resets_between_turns():
+    from pmca.types import ToolCallRequest
     session, store, _ = _make_session()
-    chunks = [_chunk()]
-    store.query.return_value = chunks
+    chunk = _chunk("fn `foo`")
+    store.query.return_value = [chunk]
 
-    with patch("pmca.chat.chat_completion", return_value="reply"):
+    rag_req = ToolCallRequest(
+        tool_call_id="call_r",
+        name="query_knowledge_base",
+        arguments={"query": "foo", "depth": "shallow"},
+    )
+    with patch("pmca.chat.chat_completion", side_effect=[rag_req, "answer1"]):
         with patch("pmca.chat.parse_attachment_paths", return_value=[]):
-            session.process("hi")
+            with patch("pmca.chat.execute_rag_query", return_value="[RAG_1]...") as mock_rag:
+                session.process("t1")
 
-    assert session._last_rag_chunks == chunks
+    seen_after_turn1 = set(session._turn_seen_chunks)
+
+    with patch("pmca.chat.chat_completion", return_value="answer2"):
+        with patch("pmca.chat.parse_attachment_paths", return_value=[]):
+            session.process("t2")
+
+    assert session._turn_seen_chunks == set()  # reset at start of turn 2
 
 
 # ---------------------------------------------------------------------------
@@ -199,23 +212,8 @@ def test_process_sends_system_prompt_first():
     assert messages[0] == {"role": "system", "content": "You are helpful."}
 
 
-def test_process_includes_rag_system_message_when_chunks_retrieved():
+def test_process_has_no_rag_system_message():
     session, store, _ = _make_session()
-    store.query.return_value = [_chunk("fn `foo`")]
-
-    with patch("pmca.chat.chat_completion", return_value="r") as mock_cc:
-        with patch("pmca.chat.parse_attachment_paths", return_value=[]):
-            session.process("hi")
-
-    messages = mock_cc.call_args[0][0]
-    rag_msg = next(m for m in messages if "[RAG_1]" in m.get("content", ""))
-    assert rag_msg["role"] == "system"
-    assert "fn `foo`" in rag_msg["content"]
-
-
-def test_process_omits_rag_message_when_no_chunks():
-    session, store, _ = _make_session()
-    store.query.return_value = []
 
     with patch("pmca.chat.chat_completion", return_value="r") as mock_cc:
         with patch("pmca.chat.parse_attachment_paths", return_value=[]):
@@ -252,11 +250,10 @@ def test_process_omits_attachment_messages_when_none():
     assert not any("[CONTEXT" in m.get("content", "") for m in messages)
 
 
-def test_startup_docs_appear_after_system_prompt_before_rag():
+def test_startup_docs_appear_after_system_prompt():
     doc_path = Path("/fake/framework.md")
     cfg = _config(startup_docs=[(doc_path, "# Framework")])
     session, store, _ = _make_session(cfg)
-    store.query.return_value = [_chunk()]
 
     with patch("pmca.chat.chat_completion", return_value="r") as mock_cc:
         with patch("pmca.chat.parse_attachment_paths", return_value=[]):
@@ -269,7 +266,6 @@ def test_startup_docs_appear_after_system_prompt_before_rag():
     assert "[STARTUP_DOC]" in messages[1]["content"]
     assert "/fake/framework.md" in messages[1]["content"]
     assert "# Framework" in messages[1]["content"]
-    assert "[RAG_1]" in messages[2]["content"]
 
 
 def test_each_startup_doc_is_separate_system_message():
@@ -300,9 +296,8 @@ def test_no_startup_doc_messages_when_startup_docs_empty():
     assert not any("[STARTUP_DOC]" in m.get("content", "") for m in messages)
 
 
-def test_process_message_order_system_rag_attachment_history_user():
+def test_process_message_order_system_attachment_history_user():
     session, store, _ = _make_session()
-    store.query.return_value = [_chunk()]
     session.history = [
         {"role": "user", "content": "old question"},
         {"role": "assistant", "content": "old answer"},
@@ -317,10 +312,10 @@ def test_process_message_order_system_rag_attachment_history_user():
 
     messages = mock_cc.call_args[0][0]
     roles = [m["role"] for m in messages]
-    # system (base), system (session_attachments), system (session_rag_chunks),
+    # system (base), system (session_attachments),
     # user (history), assistant (history), user (current)
     # No system context message — default system_context_fields=[]
-    assert roles == ["system", "system", "system", "user", "assistant", "user"]
+    assert roles == ["system", "system", "user", "assistant", "user"]
 
 
 def test_process_current_user_message_is_last():
@@ -413,56 +408,23 @@ def test_session_attachments_not_accumulated_on_abort():
 
 
 # ---------------------------------------------------------------------------
-# process() — session_rag_chunks persistence
+# process() — _turn_seen_chunks
 # ---------------------------------------------------------------------------
 
-def test_session_rag_chunks_empty_at_start():
+def test_turn_seen_chunks_empty_at_session_start():
     session, _, _ = _make_session()
-    assert session.session_rag_chunks == []
+    assert session._turn_seen_chunks == set()
 
 
-def test_session_rag_chunks_accumulates_after_turn():
-    session, store, _ = _make_session()
-    chunk = _chunk("fn `foo`")
-    store.query.return_value = [chunk]
+def test_turn_seen_chunks_reset_at_start_of_each_process():
+    session, _, _ = _make_session()
+    session._turn_seen_chunks = {(Path("/a.py"), "fn `foo`")}
 
     with patch("pmca.chat.chat_completion", return_value="r"):
         with patch("pmca.chat.parse_attachment_paths", return_value=[]):
             session.process("hi")
 
-    assert chunk in session.session_rag_chunks
-
-
-def test_session_rag_chunks_appear_in_subsequent_turn():
-    session, store, _ = _make_session()
-    chunk = _chunk("fn `foo`")
-    store.query.return_value = [chunk]
-
-    with patch("pmca.chat.chat_completion", return_value="r"):
-        with patch("pmca.chat.parse_attachment_paths", return_value=[]):
-            session.process("t1")
-
-    store.query.return_value = []
-    with patch("pmca.chat.chat_completion", return_value="r") as mock_cc:
-        with patch("pmca.chat.parse_attachment_paths", return_value=[]):
-            session.process("t2")
-
-    messages = mock_cc.call_args[0][0]
-    assert any("fn `foo`" in m.get("content", "") for m in messages)
-
-
-def test_session_rag_chunks_deduplicates_by_source_and_label():
-    session, store, _ = _make_session()
-    chunk = _chunk("fn `foo`")
-    store.query.return_value = [chunk]
-
-    with patch("pmca.chat.chat_completion", return_value="r"):
-        with patch("pmca.chat.parse_attachment_paths", return_value=[]):
-            session.process("t1")
-        with patch("pmca.chat.parse_attachment_paths", return_value=[]):
-            session.process("t2")
-
-    assert session.session_rag_chunks.count(chunk) == 1
+    assert session._turn_seen_chunks == set()
 
 
 # ---------------------------------------------------------------------------
@@ -540,7 +502,6 @@ def test_process_returns_none_response_on_abort():
 
 def test_process_calls_log_exchange():
     session, store, logger = _make_session()
-    store.query.return_value = [_chunk()]
 
     with patch("pmca.chat.chat_completion", return_value="reply"):
         with patch("pmca.chat.parse_attachment_paths", return_value=[]):
@@ -650,16 +611,6 @@ def test_rotate_logger_resets_session_attachments():
             mock_dt.now.return_value.strftime.return_value = "2026-01-01_00-00-00"
             session.rotate_logger()
     assert session.session_attachments == []
-
-
-def test_rotate_logger_resets_session_rag_chunks():
-    session, _, _ = _make_session()
-    session.session_rag_chunks = [_chunk()]
-    with patch("pmca.chat.SessionLogger"):
-        with patch("pmca.chat.datetime") as mock_dt:
-            mock_dt.now.return_value.strftime.return_value = "2026-01-01_00-00-00"
-            session.rotate_logger()
-    assert session.session_rag_chunks == []
 
 
 def test_rotate_logger_calls_log_session_start_on_new_logger():
@@ -788,6 +739,30 @@ def test_process_second_api_call_includes_tool_result_messages(tmp_path):
 # ---------------------------------------------------------------------------
 # Tool dispatch — read tools
 # ---------------------------------------------------------------------------
+
+def test_process_dispatches_query_knowledge_base(tmp_path):
+    from pmca.types import ToolCallRequest
+    session, store, _ = _make_session()
+    store._chunks = [_chunk()]  # non-empty so tool is included
+
+    tool_req = ToolCallRequest(
+        tool_call_id="call_rag",
+        name="query_knowledge_base",
+        arguments={"query": "foo", "depth": "shallow"},
+    )
+
+    with patch("pmca.chat.chat_completion", side_effect=[tool_req, "Done"]):
+        with patch("pmca.chat.parse_attachment_paths", return_value=[]):
+            with patch("pmca.chat.execute_rag_query", return_value="[RAG_1]...") as mock_rag:
+                response, _ = session.process("find stuff")
+
+    assert response == "Done"
+    mock_rag.assert_called_once()
+    args = mock_rag.call_args[0]
+    assert args[0] == {"query": "foo", "depth": "shallow"}  # arguments
+    assert args[2] is store                                  # store
+    assert isinstance(args[3], set)                          # turn_seen
+
 
 @pytest.mark.parametrize("tool_name,executor_path,executor_result", [
     ("read_file",       "pmca.chat.execute_read_file",       "file content"),

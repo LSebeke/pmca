@@ -24,7 +24,6 @@ model: gpt-4o-mini
 system_prompt: "You are helpful."
 rag_files:
   - {rag_file}
-top_k_chunks: 3
 log_folder: {log_folder}
 """
 
@@ -47,7 +46,6 @@ def test_load_valid_config_returns_config(tmp_path):
     assert cfg.model == "gpt-4o-mini"
     assert cfg.system_prompt == "You are helpful."
     assert cfg.rag_files == [rag_file]
-    assert cfg.top_k_chunks == 3
     assert cfg.log_folder == log_folder
 
 
@@ -122,11 +120,10 @@ def test_bare_name_not_found_raises_config_error(tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize("missing_field,yaml_snippet", [
-    ("name",         "model: gpt-4o\nsystem_prompt: x\nrag_files: []\ntop_k_chunks: 3\nlog_folder: ~/logs\n"),
-    ("model",        "name: x\nsystem_prompt: x\nrag_files: []\ntop_k_chunks: 3\nlog_folder: ~/logs\n"),
-    ("system_prompt","name: x\nmodel: gpt-4o\nrag_files: []\ntop_k_chunks: 3\nlog_folder: ~/logs\n"),
-    ("top_k_chunks", "name: x\nmodel: gpt-4o\nsystem_prompt: x\nrag_files: []\nlog_folder: ~/logs\n"),
-    ("log_folder",   "name: x\nmodel: gpt-4o\nsystem_prompt: x\nrag_files: []\ntop_k_chunks: 3\n"),
+    ("name",         "model: gpt-4o\nsystem_prompt: x\nrag_files: []\nlog_folder: ~/logs\n"),
+    ("model",        "name: x\nsystem_prompt: x\nrag_files: []\nlog_folder: ~/logs\n"),
+    ("system_prompt","name: x\nmodel: gpt-4o\nrag_files: []\nlog_folder: ~/logs\n"),
+    ("log_folder",   "name: x\nmodel: gpt-4o\nsystem_prompt: x\nrag_files: []\n"),
 ])
 def test_missing_required_field_raises(tmp_path, missing_field, yaml_snippet):
     cfg_path = write_yaml(tmp_path, "bad.yaml", yaml_snippet)
@@ -141,14 +138,13 @@ def test_missing_required_field_raises(tmp_path, missing_field, yaml_snippet):
 def test_raises_when_rag_file_path_not_absolute(tmp_path):
     log_folder = tmp_path / "logs"
     yaml_content = f"""\
-        name: x
-        model: gpt-4o
-        system_prompt: x
-        rag_files:
-          - relative/path/file.py
-        top_k_chunks: 3
-        log_folder: {log_folder}
-    """
+name: x
+model: gpt-4o
+system_prompt: x
+rag_files:
+  - relative/path/file.py
+log_folder: {log_folder}
+"""
     cfg_path = write_yaml(tmp_path, "bad.yaml", yaml_content)
     with pytest.raises(ConfigError, match="absolute"):
         load_config(str(cfg_path))
@@ -158,14 +154,13 @@ def test_raises_when_rag_file_does_not_exist(tmp_path):
     log_folder = tmp_path / "logs"
     missing = tmp_path / "no_such_file.py"
     yaml_content = f"""\
-        name: x
-        model: gpt-4o
-        system_prompt: x
-        rag_files:
-          - {missing}
-        top_k_chunks: 3
-        log_folder: {log_folder}
-    """
+name: x
+model: gpt-4o
+system_prompt: x
+rag_files:
+  - {missing}
+log_folder: {log_folder}
+"""
     cfg_path = write_yaml(tmp_path, "bad.yaml", yaml_content)
     with pytest.raises(ConfigError, match="not found|does not exist"):
         load_config(str(cfg_path))
@@ -179,14 +174,13 @@ def test_raises_when_log_folder_not_absolute(tmp_path):
     rag_file = tmp_path / "code.py"
     rag_file.write_text("x = 1")
     yaml_content = f"""\
-        name: x
-        model: gpt-4o
-        system_prompt: x
-        rag_files:
-          - {rag_file}
-        top_k_chunks: 3
-        log_folder: relative/logs
-    """
+name: x
+model: gpt-4o
+system_prompt: x
+rag_files:
+  - {rag_file}
+log_folder: relative/logs
+"""
     cfg_path = write_yaml(tmp_path, "bad.yaml", yaml_content)
     with pytest.raises(ConfigError, match="absolute"):
         load_config(str(cfg_path))
@@ -352,7 +346,6 @@ model: gpt-4o
 system_prompt: x
 rag_files:
   - {rag_file}
-top_k_chunks: 3
 log_folder: {log_folder}
 startup_docs:
   - ~/nonexistent_pmca_tilde_doc_test.md
@@ -370,7 +363,6 @@ model: gpt-4o
 system_prompt: x
 rag_files:
   - ~/nonexistent_pmca_tilde_rag_test.py
-top_k_chunks: 3
 log_folder: {log_folder}
 """
     cfg_path = write_yaml(tmp_path, "cfg.yaml", yaml_content)
@@ -387,7 +379,6 @@ model: gpt-4o
 system_prompt: x
 rag_files:
   - {rag_file}
-top_k_chunks: 3
 log_folder: ~/pmca_tilde_test_logs
 """
     cfg_path = write_yaml(tmp_path, "cfg.yaml", yaml_content)
@@ -482,4 +473,39 @@ def test_test_dir_raises_when_non_absolute(tmp_path):
     yaml_content = minimal_yaml(rag_file, tmp_path / "logs") + "test_dir: relative/path\n"
     cfg_path = write_yaml(tmp_path, "c.yaml", yaml_content)
     with pytest.raises(ConfigError):
+        load_config(str(cfg_path))
+
+
+# ---------------------------------------------------------------------------
+# rag depth fields
+# ---------------------------------------------------------------------------
+
+def test_rag_depth_fields_default_to_3_7_15(tmp_path):
+    rag_file = tmp_path / "code.py"
+    rag_file.write_text("x = 1")
+    cfg_path = write_yaml(tmp_path, "c.yaml", minimal_yaml(rag_file, tmp_path / "logs"))
+    cfg = load_config(str(cfg_path))
+    assert cfg.rag_shallow_k == 3
+    assert cfg.rag_medium_k == 7
+    assert cfg.rag_deep_k == 15
+
+
+def test_rag_depth_fields_accept_custom_values(tmp_path):
+    rag_file = tmp_path / "code.py"
+    rag_file.write_text("x = 1")
+    yaml_content = minimal_yaml(rag_file, tmp_path / "logs") + "rag_shallow_k: 5\nrag_medium_k: 10\nrag_deep_k: 20\n"
+    cfg_path = write_yaml(tmp_path, "c.yaml", yaml_content)
+    cfg = load_config(str(cfg_path))
+    assert cfg.rag_shallow_k == 5
+    assert cfg.rag_medium_k == 10
+    assert cfg.rag_deep_k == 20
+
+
+@pytest.mark.parametrize("field", ["rag_shallow_k", "rag_medium_k", "rag_deep_k"])
+def test_rag_depth_field_raises_when_non_positive(tmp_path, field):
+    rag_file = tmp_path / "code.py"
+    rag_file.write_text("x = 1")
+    yaml_content = minimal_yaml(rag_file, tmp_path / "logs") + f"{field}: 0\n"
+    cfg_path = write_yaml(tmp_path, "c.yaml", yaml_content)
+    with pytest.raises(ConfigError, match=field):
         load_config(str(cfg_path))

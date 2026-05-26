@@ -5,17 +5,22 @@ from unittest.mock import patch
 
 import pytest
 
+from unittest.mock import MagicMock
+
 from pmca.config import Config
+from pmca.rag.store import VectorStore
 from pmca.tools import (
     execute_edit_file,
     execute_get_definition,
     execute_list_dir,
+    execute_rag_query,
     execute_read_file,
     execute_run_tests,
     execute_search,
     execute_write_file,
     get_tools,
 )
+from pmca.types import Chunk
 
 
 # ---------------------------------------------------------------------------
@@ -25,11 +30,23 @@ from pmca.tools import (
 def _config(**overrides) -> Config:
     defaults = dict(
         name="test", model="gpt-4o-mini", system_prompt="You are helpful.",
-        rag_files=[], top_k_chunks=3, log_folder=Path("/tmp/logs"),
+        rag_files=[], log_folder=Path("/tmp/logs"),
         write_allowed_dirs=[], read_allowed_dirs=[],
     )
     defaults.update(overrides)
     return Config(**defaults)
+
+
+def _empty_store() -> VectorStore:
+    return VectorStore()
+
+
+def _store_with_chunks(*labels: str) -> VectorStore:
+    store = MagicMock(spec=VectorStore)
+    chunks = [Chunk(content=f"content {l}", source_file=Path("/src/a.py"), label=l) for l in labels]
+    store._chunks = chunks
+    store.query.return_value = chunks
+    return store
 
 
 # ---------------------------------------------------------------------------
@@ -38,12 +55,12 @@ def _config(**overrides) -> Config:
 
 def test_get_tools_returns_none_when_no_allowed_dirs():
     cfg = _config(write_allowed_dirs=[], read_allowed_dirs=[])
-    assert get_tools(cfg) is None
+    assert get_tools(cfg, _empty_store()) is None
 
 
 def test_get_tools_returns_read_tools_when_read_dirs_configured(tmp_path):
     cfg = _config(read_allowed_dirs=[tmp_path])
-    tools = get_tools(cfg)
+    tools = get_tools(cfg, _empty_store())
     assert tools is not None
     names = {t["function"]["name"] for t in tools}
     assert names == {"read_file", "list_dir", "search", "get_definition"}
@@ -51,7 +68,7 @@ def test_get_tools_returns_read_tools_when_read_dirs_configured(tmp_path):
 
 def test_get_tools_returns_all_tools_when_both_configured(tmp_path):
     cfg = _config(write_allowed_dirs=[tmp_path], read_allowed_dirs=[tmp_path])
-    tools = get_tools(cfg)
+    tools = get_tools(cfg, _empty_store())
     assert tools is not None
     names = {t["function"]["name"] for t in tools}
     assert names == {"write_file", "edit_file", "read_file", "list_dir", "search", "get_definition"}
@@ -59,14 +76,14 @@ def test_get_tools_returns_all_tools_when_both_configured(tmp_path):
 
 def test_get_tools_read_description_lists_allowed_dirs(tmp_path):
     cfg = _config(read_allowed_dirs=[tmp_path])
-    tools = get_tools(cfg)
+    tools = get_tools(cfg, _empty_store())
     descs = " ".join(t["function"]["description"] for t in tools)
     assert str(tmp_path) in descs
 
 
 def test_get_tools_returns_write_tools_when_write_dirs_configured(tmp_path):
     cfg = _config(write_allowed_dirs=[tmp_path])
-    tools = get_tools(cfg)
+    tools = get_tools(cfg, _empty_store())
     assert tools is not None
     names = {t["function"]["name"] for t in tools}
     assert names == {"write_file", "edit_file"}
@@ -74,7 +91,7 @@ def test_get_tools_returns_write_tools_when_write_dirs_configured(tmp_path):
 
 def test_get_tools_includes_edit_file_when_write_dirs_configured(tmp_path):
     cfg = _config(write_allowed_dirs=[tmp_path])
-    tools = get_tools(cfg)
+    tools = get_tools(cfg, _empty_store())
     assert tools is not None
     names = {t["function"]["name"] for t in tools}
     assert "edit_file" in names
@@ -83,14 +100,14 @@ def test_get_tools_includes_edit_file_when_write_dirs_configured(tmp_path):
 def test_get_tools_description_lists_allowed_dirs(tmp_path):
     allowed = tmp_path / "output"
     cfg = _config(write_allowed_dirs=[allowed])
-    tools = get_tools(cfg)
+    tools = get_tools(cfg, _empty_store())
     description = tools[0]["function"]["description"]
     assert str(allowed) in description
 
 
 def test_get_tools_schema_has_required_parameters(tmp_path):
     cfg = _config(write_allowed_dirs=[tmp_path])
-    tools = get_tools(cfg)
+    tools = get_tools(cfg, _empty_store())
     params = tools[0]["function"]["parameters"]
     required = params["required"]
     assert "path" in required
@@ -532,7 +549,7 @@ def test_execute_creates_parent_directories(tmp_path):
 
 def test_get_tools_includes_run_tests_when_test_dir_configured(tmp_path):
     cfg = _config(test_dir=tmp_path)
-    tools = get_tools(cfg)
+    tools = get_tools(cfg, _empty_store())
     assert tools is not None
     names = {t["function"]["name"] for t in tools}
     assert "run_tests" in names
@@ -541,17 +558,115 @@ def test_get_tools_includes_run_tests_when_test_dir_configured(tmp_path):
 def test_get_tools_excludes_run_tests_when_test_dir_is_none():
     cfg = _config()
     assert cfg.test_dir is None
-    tools = get_tools(cfg)
+    tools = get_tools(cfg, _empty_store())
     assert tools is None  # no tools at all when nothing configured
 
 
 def test_get_tools_run_tests_has_optional_filter_parameter(tmp_path):
     cfg = _config(test_dir=tmp_path)
-    tools = get_tools(cfg)
+    tools = get_tools(cfg, _empty_store())
     schema = next(t for t in tools if t["function"]["name"] == "run_tests")
     params = schema["function"]["parameters"]
     assert "filter" in params["properties"]
     assert "filter" not in params.get("required", [])
+
+
+# ---------------------------------------------------------------------------
+# get_tools — query_knowledge_base registration
+# ---------------------------------------------------------------------------
+
+def test_get_tools_includes_rag_when_store_has_content(tmp_path):
+    cfg = _config()
+    store = _store_with_chunks("fn `foo`")
+    tools = get_tools(cfg, store)
+    assert tools is not None
+    names = {t["function"]["name"] for t in tools}
+    assert "query_knowledge_base" in names
+
+
+def test_get_tools_excludes_rag_when_store_is_empty():
+    cfg = _config()
+    tools = get_tools(cfg, _empty_store())
+    assert tools is None
+
+
+def test_get_tools_rag_schema_has_query_and_depth(tmp_path):
+    cfg = _config()
+    store = _store_with_chunks("fn `foo`")
+    tools = get_tools(cfg, store)
+    schema = next(t for t in tools if t["function"]["name"] == "query_knowledge_base")
+    props = schema["function"]["parameters"]["properties"]
+    assert "query" in props
+    assert "depth" in props
+    assert schema["function"]["parameters"]["required"] == ["query", "depth"]
+
+
+# ---------------------------------------------------------------------------
+# execute_rag_query
+# ---------------------------------------------------------------------------
+
+def test_execute_rag_query_shallow_returns_at_most_shallow_k():
+    cfg = _config(rag_shallow_k=2)
+    store = _store_with_chunks("fn `a`", "fn `b`", "fn `c`")
+    store.query.return_value = [
+        Chunk(content="a", source_file=Path("/a.py"), label="fn `a`"),
+        Chunk(content="b", source_file=Path("/a.py"), label="fn `b`"),
+    ]
+    turn_seen: set = set()
+    result = execute_rag_query({"query": "foo", "depth": "shallow"}, cfg, store, turn_seen)
+    store.query.assert_called_once_with("foo", 2)
+    assert "[RAG_1]" in result
+    assert "[RAG_2]" in result
+    assert "[RAG_3]" not in result
+
+
+def test_execute_rag_query_deep_uses_deep_k():
+    cfg = _config(rag_deep_k=15)
+    store = _store_with_chunks("fn `x`")
+    store.query.return_value = [Chunk(content="x", source_file=Path("/a.py"), label="fn `x`")]
+    turn_seen: set = set()
+    execute_rag_query({"query": "q", "depth": "deep"}, cfg, store, turn_seen)
+    store.query.assert_called_once_with("q", 15)
+
+
+def test_execute_rag_query_adds_chunks_to_turn_seen():
+    cfg = _config()
+    chunk = Chunk(content="c", source_file=Path("/a.py"), label="fn `foo`")
+    store = MagicMock(spec=VectorStore)
+    store._chunks = [chunk]
+    store.query.return_value = [chunk]
+    turn_seen: set = set()
+    execute_rag_query({"query": "q", "depth": "shallow"}, cfg, store, turn_seen)
+    assert (Path("/a.py"), "fn `foo`") in turn_seen
+
+
+def test_execute_rag_query_second_call_returns_only_new_chunks():
+    cfg = _config(rag_shallow_k=3)
+    chunk_a = Chunk(content="a", source_file=Path("/a.py"), label="fn `a`")
+    chunk_b = Chunk(content="b", source_file=Path("/a.py"), label="fn `b`")
+    store = MagicMock(spec=VectorStore)
+    store._chunks = [chunk_a, chunk_b]
+    store.query.return_value = [chunk_a, chunk_b]
+    turn_seen: set = set()
+
+    execute_rag_query({"query": "q", "depth": "shallow"}, cfg, store, turn_seen)
+    result2 = execute_rag_query({"query": "q", "depth": "shallow"}, cfg, store, turn_seen)
+
+    assert "fn `a`" not in result2
+    assert "fn `b`" not in result2
+    assert "No results found." in result2
+
+
+def test_execute_rag_query_returns_no_results_when_all_seen():
+    cfg = _config()
+    chunk = Chunk(content="c", source_file=Path("/a.py"), label="fn `foo`")
+    store = MagicMock(spec=VectorStore)
+    store._chunks = [chunk]
+    store.query.return_value = [chunk]
+    turn_seen = {(Path("/a.py"), "fn `foo`")}
+
+    result = execute_rag_query({"query": "q", "depth": "shallow"}, cfg, store, turn_seen)
+    assert result == "No results found."
 
 
 # ---------------------------------------------------------------------------

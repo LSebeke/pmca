@@ -11,12 +11,10 @@ from pmca.chat import ChatSession
 
 _HELP = """\
 Commands:
-  /set chunksize=N            Set top-k RAG retrieval count for this session
   /set history_token_budget=N Set history token budget for this session
   /set test_timeout=N         Set test run timeout in seconds for this session
   /read add <path>            Add a directory to read_allowed_dirs for this session
   /read remove <path>         Remove a directory from read_allowed_dirs for this session
-  /rag                        Print RAG chunks retrieved for the last query
   /extract <path>             Extract code blocks from last response into <path> (type inferred from extension)
   /clear                      Clear conversation history
   /help                       Print this help message
@@ -28,7 +26,6 @@ Key bindings:
 """
 
 _SETTABLE = {
-    "chunksize": "top_k",
     "history_token_budget": "history_token_budget",
 }
 
@@ -75,16 +72,6 @@ def handle_command(cmd: str, session: ChatSession) -> None:
         print(_HELP, end="")
         return
 
-    if name == "/rag":
-        if not session._last_rag_chunks:
-            print("No RAG data yet — send a message first.")
-        else:
-            for i, chunk in enumerate(session._last_rag_chunks, start=1):
-                print(f"[RAG_{i}] {chunk.source_file}  {chunk.label}")
-                print(chunk.content)
-                print()
-        return
-
     if name == "/set":
         _handle_set(parts[1] if len(parts) > 1 else "", session)
         return
@@ -95,7 +82,6 @@ def handle_command(cmd: str, session: ChatSession) -> None:
 
     if name == "/clear":
         session.history = []
-        session._last_rag_chunks = []
         new_path = session.rotate_logger()
         print(f"Conversation history cleared. New session: {new_path}")
         return

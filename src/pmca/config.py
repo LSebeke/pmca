@@ -7,7 +7,7 @@ import yaml
 
 _CONFIGS_DIR: Path = Path(__file__).parent / "configs"
 
-REQUIRED_FIELDS = ("name", "model", "system_prompt", "top_k_chunks", "log_folder")
+REQUIRED_FIELDS = ("name", "model", "system_prompt", "log_folder")
 
 
 class ConfigError(Exception):
@@ -20,7 +20,6 @@ class Config:
     model: str
     system_prompt: str
     rag_files: list[Path]
-    top_k_chunks: int
     log_folder: Path
     startup_docs: list[tuple[Path, str]] = field(default_factory=list)
     write_allowed_dirs: list[Path] = field(default_factory=list)
@@ -30,6 +29,9 @@ class Config:
     test_timeout: int = 60
     max_attachment_kb: int = 500
     history_token_budget: int = 4000
+    rag_shallow_k: int = 3
+    rag_medium_k: int = 7
+    rag_deep_k: int = 15
     temperature: float | None = None
     max_tokens: int | None = None
     top_p: float | None = None
@@ -52,13 +54,13 @@ def load_config(config_name: str) -> Config:
     _validate_write_allowed_dirs(data.get("write_allowed_dirs") or [])
     _validate_read_allowed_dirs(data.get("read_allowed_dirs") or [])
     _validate_test_dir(data.get("test_dir"))
+    _validate_rag_depth_k(data)
 
     return Config(
         name=data["name"],
         model=data["model"],
         system_prompt=data["system_prompt"],
         rag_files=[Path(p).expanduser() for p in (data.get("rag_files") or [])],
-        top_k_chunks=data["top_k_chunks"],
         log_folder=Path(data["log_folder"]).expanduser(),
         startup_docs=_load_startup_docs(data.get("startup_docs") or []),
         write_allowed_dirs=[Path(p).expanduser() for p in (data.get("write_allowed_dirs") or [])],
@@ -68,6 +70,9 @@ def load_config(config_name: str) -> Config:
         test_timeout=data.get("test_timeout", 60),
         max_attachment_kb=data.get("max_attachment_kb", 500),
         history_token_budget=data.get("history_token_budget", 4000),
+        rag_shallow_k=data.get("rag_shallow_k", 3),
+        rag_medium_k=data.get("rag_medium_k", 7),
+        rag_deep_k=data.get("rag_deep_k", 15),
         temperature=data.get("temperature"),
         max_tokens=data.get("max_tokens"),
         top_p=data.get("top_p"),
@@ -125,6 +130,13 @@ def _validate_test_dir(value: str | None) -> None:
         return
     if not Path(value).expanduser().is_absolute():
         raise ConfigError(f"test_dir must be an absolute path, got: {value}")
+
+
+def _validate_rag_depth_k(data: dict) -> None:
+    for field_name in ("rag_shallow_k", "rag_medium_k", "rag_deep_k"):
+        value = data.get(field_name)
+        if value is not None and value <= 0:
+            raise ConfigError(f"{field_name} must be a positive integer, got: {value}")
 
 
 def _validate_rag_files(paths: list[str]) -> None:

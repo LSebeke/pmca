@@ -39,11 +39,13 @@ class Config:
     model: str
     system_prompt: str
     rag_files: list[Path]        # absolute paths only, validated at load time
-    top_k_chunks: int
     log_folder: Path
     write_allowed_dirs: list[Path] = field(default_factory=list)  # absolute paths; empty → write_file tool not registered
     read_allowed_dirs: list[Path] = field(default_factory=list)   # absolute paths; empty → read_file/list_dir/search tools not registered
     system_context_fields: list[str] = field(default_factory=list)  # empty by default → no system context injected
+    rag_shallow_k: int = 3       # chunks returned for depth="shallow"
+    rag_medium_k: int = 7        # chunks returned for depth="medium"
+    rag_deep_k: int = 15         # chunks returned for depth="deep"
     test_dir: Path | None = None          # absolute path; None → run_tests tool not registered
     test_timeout: int = 60                # seconds before run_tests is killed
     max_attachment_kb: int = 500
@@ -109,9 +111,6 @@ Three entry types, distinguished by a mandatory `type` field:
     "timestamp": "2025-05-14T15:32:10Z",
     "role": "user" | "assistant",
     "content": "...",
-    "rag_chunks": [                         # present on user turns only
-        {"label": "...", "source": "...", "content": "..."}
-    ],
     "attachments": [                        # present on user turns only
         {"identifier": "CONTEXT_1", "path": "...", "content": "...", "size_warning": false}
     ]
@@ -131,7 +130,7 @@ Three entry types, distinguished by a mandatory `type` field:
 }
 ```
 
-`attachments[].content` and `rag_chunks[].content` store verbatim content so that a resumed session can reconstruct full context without re-reading original files. The log is the authoritative source of truth for session state on resume.
+`attachments[].content` stores verbatim content so that a resumed session can reconstruct full context without re-reading original files. The log is the authoritative source of truth for session state on resume.
 
 ---
 
@@ -153,7 +152,7 @@ Validation rules:
 - All `rag_files` paths must be absolute, exist, and be readable
 - `log_folder` must be absolute (created if absent)
 - `OPENAI_API_KEY` must be present in environment
-- `top_k_chunks` must be a positive integer
+- `rag_shallow_k`, `rag_medium_k`, `rag_deep_k` must be positive integers if provided (defaults 3, 7, 15)
 - `max_attachment_kb` and `history_token_budget` must be positive integers if provided
 - All `write_allowed_dirs` paths must be absolute (existence not required — dirs may be created later)
 - All `read_allowed_dirs` paths must be absolute (existence not required)
@@ -293,28 +292,25 @@ class ChatSession:
     system_prompt: str           # active system prompt (from config or log on resume)
     startup_docs: list[tuple[Path, str]]  # active startup docs (from config or log on resume)
     history: list[dict]          # {"role": "user"|"assistant", "content": str}
-    top_k: int                   # mutable via /set
     history_token_budget: int    # mutable via /set
-    _last_rag_chunks: list[Chunk]   # stored for /rag command
     session_attachments: list[Attachment]  # all attachments accumulated this session
-    session_rag_chunks: list[Chunk]        # all RAG chunks accumulated this session (deduped)
     _next_attachment_n: int      # session-global counter for CONTEXT_<n> identifiers
     _system_context: str | None  # computed once at __init__ from config.system_context_fields; None if list is empty
+    _turn_seen_chunks: set[tuple[Path, str]]  # (source_file, label) pairs already returned this turn; reset at start of each process()
 
     def process(self, user_input: str) -> str:
         """
         Full pipeline for one user turn:
-          1. Parse and resolve attachments (passing _next_attachment_n as start_n);
+          1. Reset _turn_seen_chunks to empty set.
+          2. Parse and resolve attachments (passing _next_attachment_n as start_n);
              substitute identifiers in message.
              Advance _next_attachment_n by len(attachments) on success only.
              Append new attachments to session_attachments.
-          2. Trim history to fit history_token_budget; note turns dropped.
-          3. Query RAG store for top_k chunks. Merge new chunks into session_rag_chunks
-             (deduplicated by (source_file, label)).
+          3. Trim history to fit history_token_budget; note turns dropped.
           4. Assemble message list (see Section 5).
-          5. Call openai_client.chat_completion() with tools list (if write_allowed_dirs set).
+          5. Call openai_client.chat_completion() with tools list.
           6. Tool loop: while response is a ToolCallRequest:
-               a. Execute the tool (write_file): validate path, prompt user for approval, write.
+               a. Execute the tool via _dispatch_tool().
                b. Log the tool call via SessionLogger.
                c. Append assistant tool-call message + tool result message to messages list.
                d. Call chat_completion() again.
@@ -323,12 +319,18 @@ class ChatSession:
           9. Return (assistant_response, turns_dropped).
         """
 
+    def _dispatch_tool(self, response: ToolCallRequest) -> tuple[bool, str]:
+        """
+        Route a tool call to its executor. Has access to self.store and self._turn_seen_chunks
+        for the query_knowledge_base tool.
+        """
+
     def rotate_logger(self) -> Path:
         """
         Close the current logger, open a new one with a fresh timestamp in
         config.log_folder, write session-start entries (system_prompt, startup_docs),
         assign it to self.logger, and return the path of the new JSONL file.
-        Also resets _next_attachment_n to 1, session_attachments to [], session_rag_chunks to [].
+        Also resets _next_attachment_n to 1 and session_attachments to [].
         """
 
     def _trim_history(self) -> int:
@@ -336,12 +338,6 @@ class ChatSession:
         Drop oldest turns (user+assistant pairs) until history fits within
         history_token_budget. Token count estimated as len(content) // 4.
         Returns number of turns dropped.
-        """
-
-    def _merge_rag_chunks(self, new_chunks: list[Chunk]) -> None:
-        """
-        Add chunks from new_chunks to session_rag_chunks that are not already present,
-        matching on (source_file, label).
         """
 ```
 
@@ -376,16 +372,40 @@ Permanent errors: `AuthenticationError`, `BadRequestError`, other `APIStatusErro
 
 ### 4.8 `tools.py`
 
-**Responsibilities:** Define tool schemas and implement execution for `write_file`, `edit_file`, `read_file`, `list_dir`, `search`, `get_definition`, and `run_tests`. All read tools are gated by `read_allowed_dirs`; writes are gated by `write_allowed_dirs`; test execution is gated by `test_dir`. Reads and test runs execute without user approval; writes require per-call approval.
+**Responsibilities:** Define tool schemas and implement execution for `query_knowledge_base`, `write_file`, `edit_file`, `read_file`, `list_dir`, `search`, `get_definition`, and `run_tests`. All read tools are gated by `read_allowed_dirs`; writes are gated by `write_allowed_dirs`; test execution is gated by `test_dir`; RAG is gated by store content. Reads and test runs execute without user approval; writes require per-call approval.
 
 ```python
-def get_tools(config: Config) -> list[dict] | None:
+def get_tools(config: Config, store: VectorStore) -> list[dict] | None:
     """
     Returns the full tools list to pass to chat_completion, or None if no tools
-    are enabled (both write_allowed_dirs and read_allowed_dirs are empty).
-    write_file is included when write_allowed_dirs is non-empty.
+    are enabled.
+    query_knowledge_base is included when store has indexed content (store._chunks is non-empty).
+    write_file and edit_file are included when write_allowed_dirs is non-empty.
     read_file, list_dir, search, and get_definition are included when read_allowed_dirs is non-empty.
-    Tool descriptions include the relevant allowed directories.
+    run_tests is included when test_dir is not None.
+    Tool descriptions include the relevant allowed directories / depth levels.
+    """
+
+def execute_rag_query(
+    arguments: dict,
+    config: Config,
+    store: VectorStore,
+    turn_seen: set[tuple[Path, str]],
+) -> str:
+    """
+    Query the vector store and return only chunks not already in turn_seen.
+    arguments: {"query": str, "depth": "shallow" | "medium" | "deep"}
+    depth maps to config.rag_shallow_k / rag_medium_k / rag_deep_k (defaults 3/7/15).
+    Adds newly returned chunks to turn_seen.
+    Returns formatted chunks as:
+      [RAG_1]
+      File: /abs/path
+      Chunk: <label>
+      ---
+      <content>
+      ---
+      [RAG_2] ...
+    Returns "No results found." when store is empty or all top-k results were already seen.
     """
 
 def execute_write_file(arguments: dict, config: Config) -> tuple[bool, str]:
@@ -547,7 +567,6 @@ class SessionLogger:
         self,
         user_message: str,
         assistant_message: str,
-        rag_chunks: list[Chunk],
         attachments: list[Attachment],
     ) -> None:
         """Appends two {"type": "exchange", ...} lines: one user entry, one assistant entry."""
@@ -580,7 +599,6 @@ class ResumedSession:
     startup_docs: list[tuple[Path, str]]    # from "startup_doc" log entries (in order)
     history: list[dict]                     # {"role": "user"|"assistant", "content": str} pairs
     session_attachments: list[Attachment]   # all attachments seen, unique by identifier, in order
-    session_rag_chunks: list[Chunk]         # all RAG chunks seen, deduplicated by (source_file, label)
     last_assistant_message: str             # for printing at startup
     jsonl_path: Path                        # original path (for logger append)
     next_attachment_n: int                  # max(N for CONTEXT_N in log) + 1; new attachments start here
@@ -598,7 +616,6 @@ def load_resume(path: Path) -> ResumedSession:
       - Reads startup_docs from all "startup_doc" entries (preserving order).
       - Builds history from all "exchange" role lines (role + content only).
       - Collects session_attachments: unique by identifier, in first-seen order.
-      - Collects session_rag_chunks: deduplicated by (source_file, label), in first-seen order.
       - Returns the last assistant exchange message for startup display.
       - Computes next_attachment_n as max(N for all CONTEXT_N identifiers found) + 1,
         or 1 if no attachments were present.
@@ -622,11 +639,10 @@ def run_repl(session: ChatSession) -> None:
 
 def handle_command(cmd: str, session: ChatSession) -> None:
     """
-    /set <param>=<value>  — update session.top_k, session.history_token_budget, or session.config.test_timeout
-    /rag                  — print session._last_rag_chunks
+    /set <param>=<value>  — update session.history_token_budget or session.config.test_timeout
     /extract <path>       — write code blocks from last response to <path> (fence language inferred from extension)
-    /clear                — reset session.history, session._last_rag_chunks, session.resumed_context,
-                            and session._next_attachment_n (to 1); call session.rotate_logger();
+    /clear                — reset session.history and session._next_attachment_n (to 1);
+                            call session.rotate_logger();
                             print "Conversation history cleared. New session: <path>"
     /help                 — print command reference
     /exit                 — raise SystemExit
@@ -696,21 +712,13 @@ Order sent to OpenAI on each turn:
           ---
           [CONTEXT_2] ...
 
-[system]  [RAG_1]                    ← ALL session_rag_chunks accumulated so far
-          File: /absolute/path/to/file.py
-          Chunk: function `parse_config` (lines 15–32)
-          ---
-          <chunk content>
-          ---
-          [RAG_2] ...
-
 [user]    <prior user message>
 [assistant] <prior response>
 [user]    ...  ← trimmed history (oldest dropped first)
 [user]    <current message>
 ```
 
-All session_attachments and session_rag_chunks are injected on every turn. Only user/assistant exchanges are stored in history. There is no special `[RESUMED_CONTEXT]` block — resumed sessions use the same assembly path as live sessions.
+All session_attachments are injected on every turn. RAG chunks are no longer injected as system messages — the model retrieves them on demand via the `query_knowledge_base` tool, and results appear inline as tool result messages. Only user/assistant exchanges are stored in history. There is no special `[RESUMED_CONTEXT]` block — resumed sessions use the same assembly path as live sessions.
 
 ---
 
@@ -763,8 +771,7 @@ When `--resume <path>` is provided:
      `Warning: config startup_docs differ from log — using log version`
 3. `session.history` is populated from all `exchange` entries.
 4. `session.session_attachments` is populated from all unique attachments across the log (unique by identifier, first-seen order).
-5. `session.session_rag_chunks` is populated from all RAG chunks across the log (deduplicated by `(source_file, label)`, first-seen order).
-6. `session._next_attachment_n` is set from `ResumedSession.next_attachment_n`.
+5. `session._next_attachment_n` is set from `ResumedSession.next_attachment_n`.
 7. The logger appends to the original JSONL file and its matching debug log — it does NOT write new session-start entries (they are already in the log).
 8. At startup the REPL prints:
    - `Resumed N turns from <path>`
@@ -780,12 +787,10 @@ History trimming is lazy: the first `session.process()` call runs `_trim_history
 |---|---|
 | `/read add <path>` | Add a directory to `read_allowed_dirs` for this session (requires user approval) |
 | `/read remove <path>` | Remove a directory from `read_allowed_dirs` for this session (requires user approval) |
-| `/set chunksize=N` | Set top-k RAG retrieval count for this session |
 | `/set history_token_budget=N` | Set history token budget for this session |
 | `/set test_timeout=N` | Set test run timeout (seconds) for this session |
-| `/rag` | Print RAG chunks retrieved for the last query |
 | `/extract <path>` | Extract code blocks from the last response into `<path>`; fence language inferred from extension (`.py`, `.yaml`/`.yml`, `.json`, `.toml`, `.sh`) |
-| `/clear` | Clear conversation history, session_attachments, session_rag_chunks, and last RAG chunks; rotate to a new log file (writes fresh system_prompt + startup_doc entries); print new log path |
+| `/clear` | Clear conversation history and session_attachments; rotate to a new log file (writes fresh system_prompt + startup_doc entries); print new log path |
 | `/help` | Print command reference and key bindings |
 | `/exit` | End session (also: Ctrl+C) |
 

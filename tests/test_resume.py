@@ -21,7 +21,7 @@ def _minimal_log(tmp_path: Path) -> Path:
     p = tmp_path / "chat_2025-01-01_00-00-00.jsonl"
     _write_jsonl(p, [
         {"type": "system_prompt", "content": "You are helpful."},
-        {"type": "exchange", "timestamp": "t", "role": "user", "content": "hello", "rag_chunks": [], "attachments": []},
+        {"type": "exchange", "timestamp": "t", "role": "user", "content": "hello", "attachments": []},
         {"type": "exchange", "timestamp": "t", "role": "assistant", "content": "hi there"},
     ])
     return p
@@ -210,49 +210,6 @@ def test_load_resume_session_attachments_empty_when_none(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# session_rag_chunks
-# ---------------------------------------------------------------------------
-
-def test_load_resume_returns_session_rag_chunks(tmp_path):
-    p = tmp_path / "chat_ts.jsonl"
-    _write_jsonl(p, [
-        {"type": "system_prompt", "content": "sp"},
-        {
-            "type": "exchange", "timestamp": "t", "role": "user", "content": "hi",
-            "rag_chunks": [{"label": "fn `foo`", "source": "/src/a.py", "content": "def foo(): pass"}],
-            "attachments": [],
-        },
-        {"type": "exchange", "timestamp": "t", "role": "assistant", "content": "ok"},
-    ])
-    result = load_resume(p)
-    assert len(result.session_rag_chunks) == 1
-    chunk = result.session_rag_chunks[0]
-    assert chunk.label == "fn `foo`"
-    assert chunk.source_file == Path("/src/a.py")
-    assert chunk.content == "def foo(): pass"
-
-
-def test_load_resume_deduplicates_session_rag_chunks(tmp_path):
-    p = tmp_path / "chat_ts.jsonl"
-    rag = {"label": "fn `foo`", "source": "/src/a.py", "content": "def foo(): pass"}
-    _write_jsonl(p, [
-        {"type": "system_prompt", "content": "sp"},
-        {"type": "exchange", "timestamp": "t", "role": "user", "content": "t1", "rag_chunks": [rag], "attachments": []},
-        {"type": "exchange", "timestamp": "t", "role": "assistant", "content": "r1"},
-        {"type": "exchange", "timestamp": "t", "role": "user", "content": "t2", "rag_chunks": [rag], "attachments": []},
-        {"type": "exchange", "timestamp": "t", "role": "assistant", "content": "r2"},
-    ])
-    result = load_resume(p)
-    assert len(result.session_rag_chunks) == 1
-
-
-def test_load_resume_session_rag_chunks_empty_when_none(tmp_path):
-    p = _minimal_log(tmp_path)
-    result = load_resume(p)
-    assert result.session_rag_chunks == []
-
-
-# ---------------------------------------------------------------------------
 # jsonl_path and next_attachment_n
 # ---------------------------------------------------------------------------
 
@@ -294,3 +251,9 @@ def test_load_resume_result_has_no_resumed_context_field(tmp_path):
     p = _minimal_log(tmp_path)
     result = load_resume(p)
     assert not hasattr(result, "resumed_context")
+
+
+def test_load_resume_result_has_no_session_rag_chunks_field(tmp_path):
+    p = _minimal_log(tmp_path)
+    result = load_resume(p)
+    assert not hasattr(result, "session_rag_chunks")

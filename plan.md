@@ -664,6 +664,91 @@ Apply all source changes listed above.
 
 ---
 
+## Phase 27 — RAG as a tool (`query_knowledge_base`)
+
+**Why here:** Builds on stable `config.py`, `tools.py`, `chat.py`, `logger.py`, and `resume.py`. Converts RAG from auto-fire-on-each-prompt to an LLM-callable tool. Requires coordinated changes across five modules.
+
+### Changes across modules
+
+**`config.py`**
+- Remove `top_k_chunks` field
+- Add `rag_shallow_k: int = 3`, `rag_medium_k: int = 7`, `rag_deep_k: int = 15`
+- Validate: all three must be positive integers if provided
+
+**`tools.py`**
+- Add `_RAG_SCHEMA` — schema with `query: str` (required) and `depth: "shallow" | "medium" | "deep"` (required, enum)
+- `get_tools(config, store)`: add `store: VectorStore` parameter; include `query_knowledge_base` when `store._chunks` is non-empty
+- Add `execute_rag_query(arguments, config, store, turn_seen)`:
+  - Maps `depth` to `config.rag_shallow_k` / `rag_medium_k` / `rag_deep_k`
+  - Calls `store.query(query, k)`, filters out keys already in `turn_seen`
+  - Adds new chunks' `(source_file, label)` to `turn_seen`
+  - Returns formatted `[RAG_1] ... [RAG_N]` string, or `"No results found."` if all filtered
+
+**`chat.py`**
+- Remove `top_k`, `_last_rag_chunks`, `session_rag_chunks` fields
+- Add `_turn_seen_chunks: set[tuple[Path, str]]` — reset to `set()` at top of each `process()`
+- Remove auto-RAG call from `process()` (step 3 in old design)
+- Remove `_merge_rag_chunks()` method
+- Convert `_dispatch_tool` from module-level function to method on `ChatSession`; dispatch `query_knowledge_base` → `execute_rag_query(args, config, self.store, self._turn_seen_chunks)`
+- `process()`: pass `get_tools(config, self.store)` instead of `get_tools(config)`
+- `rotate_logger()`: remove reset of `session_rag_chunks`
+- `log_exchange()` call: drop `rag_chunks` argument
+
+**`logger.py`**
+- `log_exchange(user_message, assistant_message, attachments)`: drop `rag_chunks` parameter and `"rag_chunks"` field from log entry
+
+**`resume.py`**
+- Remove `session_rag_chunks` from `ResumedSession`
+- `load_resume()`: stop collecting RAG chunks from exchange entries
+
+**`repl.py`**
+- Remove `/set chunksize=N` handler and `/rag` command
+- Update `/clear` handler: remove reset of `session_rag_chunks` and `_last_rag_chunks`
+- Update `/help` output
+
+### Red
+
+**`config.py`**
+- `rag_shallow_k` / `rag_medium_k` / `rag_deep_k` default to 3 / 7 / 15 when absent from YAML
+- Raises `ConfigError` when any of the three is non-positive
+- `top_k_chunks` is no longer a known field (unknown keys are ignored — no error, just absent from Config)
+
+**`tools.py`**
+- `get_tools(config, store)` includes `query_knowledge_base` when store has chunks; excludes it when store is empty
+- `execute_rag_query` with `depth="shallow"` returns at most `config.rag_shallow_k` new chunks
+- `execute_rag_query` with `depth="medium"` returns at most `config.rag_medium_k` new chunks
+- `execute_rag_query` with `depth="deep"` returns at most `config.rag_deep_k` new chunks
+- A second call with the same query returns only chunks not seen in the first call
+- Returns `"No results found."` when all top-k results were already in `turn_seen`
+- Returns formatted `[RAG_1]…[RAG_N]` string on success
+
+**`chat.py`**
+- `_turn_seen_chunks` is reset to empty at the start of each `process()` call
+- `process()` does not call `store.query()` directly
+- `_dispatch_tool` routes `query_knowledge_base` to `execute_rag_query`
+- `session_rag_chunks` and `_last_rag_chunks` no longer exist on `ChatSession`
+- `log_exchange` is called without `rag_chunks`
+
+**`logger.py`**
+- `log_exchange` with two args (no `rag_chunks`) writes correct user/assistant entries
+- User entry has no `"rag_chunks"` key
+
+**`resume.py`**
+- `load_resume` returns `ResumedSession` without `session_rag_chunks`
+- `load_resume` still correctly reads attachments and history
+
+**`repl.py`**
+- `/set chunksize=N` prints "unknown parameter" error
+- `/rag` prints "unknown command" error (or is removed)
+
+### Green
+Apply all source changes listed above.
+
+### Refactor
+- None needed — changes are localised to five modules.
+
+---
+
 ## Phase 11 — Integration smoke test
 
 One end-to-end test with real files, mocked OpenAI API, and a real temp log directory:

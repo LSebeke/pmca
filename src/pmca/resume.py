@@ -4,7 +4,7 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
-from pmca.types import Attachment, Chunk
+from pmca.types import Attachment
 
 
 class ResumeError(Exception):
@@ -17,7 +17,6 @@ class ResumedSession:
     startup_docs: list[tuple[Path, str]]
     history: list[dict]
     session_attachments: list[Attachment]
-    session_rag_chunks: list[Chunk]
     last_assistant_message: str
     jsonl_path: Path
     next_attachment_n: int
@@ -73,7 +72,6 @@ def load_resume(path: Path) -> ResumedSession:
     )
 
     session_attachments = _collect_attachments(exchange_entries)
-    session_rag_chunks = _collect_rag_chunks(exchange_entries)
     next_attachment_n = _compute_next_attachment_n(exchange_entries)
 
     return ResumedSession(
@@ -81,7 +79,6 @@ def load_resume(path: Path) -> ResumedSession:
         startup_docs=startup_docs,
         history=history,
         session_attachments=session_attachments,
-        session_rag_chunks=session_rag_chunks,
         last_assistant_message=last_assistant,
         jsonl_path=path,
         next_attachment_n=next_attachment_n,
@@ -104,25 +101,6 @@ def _collect_attachments(exchange_entries: list[dict]) -> list[Attachment]:
                 content=att["content"],
                 identifier=ident,
                 size_warning=att.get("size_warning", False),
-            ))
-    return result
-
-
-def _collect_rag_chunks(exchange_entries: list[dict]) -> list[Chunk]:
-    seen: set[tuple[str, str]] = set()
-    result: list[Chunk] = []
-    for entry in exchange_entries:
-        if entry.get("role") != "user":
-            continue
-        for c in entry.get("rag_chunks", []):
-            key = (c.get("source", ""), c.get("label", ""))
-            if key in seen:
-                continue
-            seen.add(key)
-            result.append(Chunk(
-                content=c["content"],
-                source_file=Path(c["source"]),
-                label=c["label"],
             ))
     return result
 

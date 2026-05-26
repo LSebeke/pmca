@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import IO
 
-from pmca.types import Attachment, Chunk
+from pmca.types import Attachment
 
 
 class SessionLogger:
@@ -37,7 +37,6 @@ class SessionLogger:
         self,
         user_message: str,
         assistant_message: str,
-        rag_chunks: list[Chunk],
         attachments: list[Attachment],
     ) -> None:
         now = _utcnow()
@@ -46,7 +45,6 @@ class SessionLogger:
             "timestamp": now,
             "role": "user",
             "content": user_message,
-            "rag_chunks": [_chunk_dict(c) for c in rag_chunks],
             "attachments": [_attachment_dict(a) for a in attachments],
         }
         asst_entry = {
@@ -90,10 +88,6 @@ class SessionLogger:
 
 def _utcnow() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-
-def _chunk_dict(chunk: Chunk) -> dict:
-    return {"label": chunk.label, "source": str(chunk.source_file), "content": chunk.content}
 
 
 def _attachment_dict(attachment: Attachment) -> dict:

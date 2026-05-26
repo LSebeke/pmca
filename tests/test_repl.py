@@ -4,7 +4,6 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from pmca.repl import handle_command, run_repl
-from pmca.types import Chunk
 
 
 # ---------------------------------------------------------------------------
@@ -13,16 +12,10 @@ from pmca.types import Chunk
 
 def _session(**attrs):
     session = MagicMock()
-    session.top_k = 3
     session.history_token_budget = 4000
-    session._last_rag_chunks = []
     for k, v in attrs.items():
         setattr(session, k, v)
     return session
-
-
-def _chunk(label: str = "fn `foo`", source: str = "a.py") -> Chunk:
-    return Chunk(content="def foo(): pass", source_file=Path(source), label=label)
 
 
 def _run(inputs: list, session=None):
@@ -41,31 +34,10 @@ def _run(inputs: list, session=None):
 # handle_command — /set
 # ---------------------------------------------------------------------------
 
-def test_set_chunksize_updates_top_k():
-    session = _session()
-    handle_command("/set chunksize=5", session)
-    assert session.top_k == 5
-
-
 def test_set_history_token_budget():
     session = _session()
     handle_command("/set history_token_budget=2000", session)
     assert session.history_token_budget == 2000
-
-
-def test_set_negative_chunksize_prints_error_and_leaves_unchanged(capsys):
-    session = _session(top_k=3)
-    handle_command("/set chunksize=-1", session)
-    assert session.top_k == 3
-    out = capsys.readouterr().out
-    assert out.strip()  # something was printed
-
-
-def test_set_zero_chunksize_prints_error(capsys):
-    session = _session(top_k=3)
-    handle_command("/set chunksize=0", session)
-    assert session.top_k == 3
-    assert capsys.readouterr().out.strip()
 
 
 def test_set_unknown_param_prints_error(capsys):
@@ -75,38 +47,11 @@ def test_set_unknown_param_prints_error(capsys):
     assert out.strip()
 
 
-def test_set_non_integer_value_prints_error(capsys):
-    session = _session(top_k=3)
-    handle_command("/set chunksize=abc", session)
-    assert session.top_k == 3
-    assert capsys.readouterr().out.strip()
-
-
-# ---------------------------------------------------------------------------
-# handle_command — /rag
-# ---------------------------------------------------------------------------
-
-def test_rag_prints_chunk_labels(capsys):
-    chunk = _chunk("function `parse` (lines 1–5)")
-    session = _session(_last_rag_chunks=[chunk])
-    handle_command("/rag", session)
+def test_set_chunksize_prints_unknown_param_error(capsys):
+    session = _session()
+    handle_command("/set chunksize=5", session)
     out = capsys.readouterr().out
-    assert "function `parse` (lines 1–5)" in out
-
-
-def test_rag_prints_chunk_source(capsys):
-    chunk = _chunk(source="a.py")
-    session = _session(_last_rag_chunks=[chunk])
-    handle_command("/rag", session)
-    out = capsys.readouterr().out
-    assert "a.py" in out
-
-
-def test_rag_no_data_prints_notice(capsys):
-    session = _session(_last_rag_chunks=[])
-    handle_command("/rag", session)
-    out = capsys.readouterr().out
-    assert out.strip()
+    assert out.strip()  # must print an error — chunksize is no longer a valid param
 
 
 # ---------------------------------------------------------------------------
@@ -123,9 +68,14 @@ def test_help_mentions_set(capsys):
     assert "/set" in capsys.readouterr().out
 
 
-def test_help_mentions_rag(capsys):
+def test_help_does_not_mention_rag(capsys):
     handle_command("/help", _session())
-    assert "/rag" in capsys.readouterr().out
+    assert "/rag" not in capsys.readouterr().out
+
+
+def test_help_does_not_mention_chunksize(capsys):
+    handle_command("/help", _session())
+    assert "chunksize" not in capsys.readouterr().out
 
 
 def test_help_mentions_exit(capsys):
@@ -206,7 +156,7 @@ def test_keyboard_interrupt_exits_loop():
 # ---------------------------------------------------------------------------
 
 def test_clear_prints_confirmation(capsys):
-    session = _session(history=[{"role": "user", "content": "hi"}], _last_rag_chunks=[])
+    session = _session(history=[{"role": "user", "content": "hi"}])
     handle_command("/clear", session)
     assert "Conversation history cleared." in capsys.readouterr().out
 
@@ -215,12 +165,6 @@ def test_clear_resets_history():
     session = _session(history=[{"role": "user", "content": "hi"}, {"role": "assistant", "content": "hello"}])
     handle_command("/clear", session)
     assert session.history == []
-
-
-def test_clear_resets_last_rag_chunks():
-    session = _session(_last_rag_chunks=[_chunk(), _chunk("fn `bar`")])
-    handle_command("/clear", session)
-    assert session._last_rag_chunks == []
 
 
 def test_clear_resets_session_attachments():
