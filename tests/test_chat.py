@@ -783,3 +783,34 @@ def test_process_second_api_call_includes_tool_result_messages(tmp_path):
     tool_msg = next(m for m in second_call_messages if m["role"] == "tool")
     assert tool_msg["tool_call_id"] == "call_1"
     assert "denied" in tool_msg["content"].lower()
+
+
+# ---------------------------------------------------------------------------
+# Tool dispatch — read tools
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("tool_name,executor_path,executor_result", [
+    ("read_file",       "pmca.chat.execute_read_file",       "file content"),
+    ("list_dir",        "pmca.chat.execute_list_dir",        "/src/a.py\n/src/b.py"),
+    ("search",          "pmca.chat.execute_search",          "match at line 3"),
+    ("get_definition",  "pmca.chat.execute_get_definition",  "def foo():\n    pass"),
+])
+def test_process_dispatches_read_tool(tmp_path, tool_name, executor_path, executor_result):
+    from pmca.types import ToolCallRequest
+    cfg = _config(read_allowed_dirs=[tmp_path])
+    session, _, _ = _make_session(cfg)
+
+    tool_req = ToolCallRequest(
+        tool_call_id="call_r1",
+        name=tool_name,
+        arguments={"path": str(tmp_path / "x"), "pattern": "foo", "symbol": "foo",
+                   "recursive": False, "context_lines": 3},
+    )
+
+    with patch("pmca.chat.chat_completion", side_effect=[tool_req, "Done"]):
+        with patch("pmca.chat.parse_attachment_paths", return_value=[]):
+            with patch(executor_path, return_value=executor_result) as mock_exec:
+                response, _ = session.process("explore")
+
+    assert response == "Done"
+    mock_exec.assert_called_once()

@@ -42,6 +42,7 @@ class Config:
     top_k_chunks: int
     log_folder: Path
     write_allowed_dirs: list[Path] = field(default_factory=list)  # absolute paths; empty → write_file tool not registered
+    read_allowed_dirs: list[Path] = field(default_factory=list)   # absolute paths; empty → read_file/list_dir/search tools not registered
     system_context_fields: list[str] = field(default_factory=list)  # empty by default → no system context injected
     max_attachment_kb: int = 500
     history_token_budget: int = 4000
@@ -153,6 +154,7 @@ Validation rules:
 - `top_k_chunks` must be a positive integer
 - `max_attachment_kb` and `history_token_budget` must be positive integers if provided
 - All `write_allowed_dirs` paths must be absolute (existence not required — dirs may be created later)
+- All `read_allowed_dirs` paths must be absolute (existence not required)
 
 Path expansion: before the absolute-path check, all path fields (`log_folder`, `rag_files`, `startup_docs`) are expanded via `Path.expanduser()`. This allows cross-platform configs to use `~` (e.g. `log_folder: ~/.pmca/logs`) without hardcoding OS-specific absolute paths.
 
@@ -372,17 +374,16 @@ Permanent errors: `AuthenticationError`, `BadRequestError`, other `APIStatusErro
 
 ### 4.8 `tools.py`
 
-**Responsibilities:** Define the `write_file` tool schema and implement its execution, including path validation, user approval prompt, and file write.
+**Responsibilities:** Define tool schemas and implement execution for `write_file`, `read_file`, `list_dir`, and `search`. All read tools are gated by `read_allowed_dirs`; writes are gated by `write_allowed_dirs`. Reads execute silently; writes require per-call user approval.
 
 ```python
-WRITE_FILE_SCHEMA: dict  # OpenAI function schema for write_file
-
 def get_tools(config: Config) -> list[dict] | None:
     """
-    Returns the tools list to pass to chat_completion, or None if write_file
-    is not enabled (i.e. config.write_allowed_dirs is empty).
-    The tool description includes the list of allowed directories so the model
-    knows where it may write.
+    Returns the full tools list to pass to chat_completion, or None if no tools
+    are enabled (both write_allowed_dirs and read_allowed_dirs are empty).
+    write_file is included when write_allowed_dirs is non-empty.
+    read_file, list_dir, search, and get_definition are included when read_allowed_dirs is non-empty.
+    Tool descriptions include the relevant allowed directories.
     """
 
 def execute_write_file(arguments: dict, config: Config) -> tuple[bool, str]:
@@ -408,6 +409,50 @@ def execute_write_file(arguments: dict, config: Config) -> tuple[bool, str]:
 
     On denial:
       - Return (False, "Write denied by user. Path: /full/path")
+    """
+
+def execute_read_file(arguments: dict, config: Config) -> str:
+    """
+    Validate path against config.read_allowed_dirs, read and return the file content.
+    No user prompt — reads are silent.
+    Returns the UTF-8 content on success, or an error string if path is outside
+    allowed dirs, file not found, or I/O error.
+    """
+
+def execute_list_dir(arguments: dict, config: Config) -> str:
+    """
+    Validate path against config.read_allowed_dirs, list directory contents.
+    arguments: {"path": str, "recursive": bool}
+    If recursive=False: returns immediate children only.
+    If recursive=True: returns full directory tree.
+    Returns a newline-separated list of paths, or an error string.
+    """
+
+def execute_search(arguments: dict, config: Config) -> str:
+    """
+    Validate path against config.read_allowed_dirs, search for pattern.
+    arguments: {"path": str, "pattern": str, "context_lines": int}
+    path may be a file or a directory; if a directory, searches recursively.
+    pattern is a regex string (re module); match is case-sensitive by default.
+    context_lines controls how many lines before/after each match to include (default 3).
+    Returns formatted results: for each match, "file:lineno: <line>" with
+    context_lines lines of context above/below, separated by "--" between matches.
+    Returns "No matches found." if pattern matches nothing.
+    Returns an error string if path is outside allowed dirs or pattern is invalid.
+    """
+
+def execute_get_definition(arguments: dict, config: Config) -> str:
+    """
+    Validate path against config.read_allowed_dirs, then return the full source
+    of the named Python function or class (including decorators and docstring).
+    arguments: {"path": str, "symbol": str}
+    path must be a .py file. symbol is a top-level or method name
+    (e.g. "MyClass" or "MyClass.my_method").
+    Uses ast.parse() to locate the node; extracts source lines via
+    ast.get_source_segment() or equivalent.
+    Returns the full source text on success.
+    Returns an error string if path is outside allowed dirs, not a .py file,
+    file not found, symbol not found, or parse error.
     """
 ```
 
@@ -671,6 +716,8 @@ History trimming is lazy: the first `session.process()` call runs `_trim_history
 
 | Command | Effect |
 |---|---|
+| `/read add <path>` | Add a directory to `read_allowed_dirs` for this session (requires user approval) |
+| `/read remove <path>` | Remove a directory from `read_allowed_dirs` for this session (requires user approval) |
 | `/set chunksize=N` | Set top-k RAG retrieval count for this session |
 | `/set history_token_budget=N` | Set history token budget for this session |
 | `/rag` | Print RAG chunks retrieved for the last query |
@@ -704,6 +751,12 @@ Key bindings:
 | write_file path outside allowed dirs | Tool returns error string to model; user is not prompted |
 | User denies write_file | Tool returns `"Write denied by user. Path: ..."` to model; session continues |
 | write_file I/O error (e.g. permission denied) | Tool returns error string to model; session continues |
+| read_file/list_dir/search/get_definition — path outside read_allowed_dirs | Tool returns error string to model; no user prompt |
+| read_file file not found or I/O error | Tool returns error string to model; session continues |
+| get_definition file not found, not a .py file, or parse error | Tool returns error string to model; session continues |
+| search invalid regex pattern | Tool returns error string to model; session continues |
+| get_definition symbol not found | Tool returns error string to model; session continues |
+| /read add/remove — user denies | read_allowed_dirs unchanged; message printed to user |
 | `--resume` file not found | Print error, exit before session starts |
 | `--resume` file has zero valid turns | Print error, exit before session starts |
 | `--resume` file has malformed lines | Print error with line numbers, exit before session starts |

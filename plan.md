@@ -494,6 +494,74 @@ Apply all source changes listed above.
 
 ---
 
+## Phase 24 — Codebase exploration tools (read_file, list_dir, search, get_definition)
+
+**Why here:** Builds on the stable `config.py`, `tools.py`, `chat.py`, and `repl.py`. Adds opt-in read-only codebase exploration gated by `read_allowed_dirs` in the config YAML, with mid-session control via `/read add` and `/read remove`.
+
+### Changes across modules
+
+**`config.py`**
+- Add `read_allowed_dirs: list[Path]` field (default `[]`)
+- Validate: all entries must be absolute paths; existence not required
+
+**`tools.py`**
+- Add schemas and executors for `read_file`, `list_dir`, `search`, `get_definition`
+- `get_tools()`: include read tools when `read_allowed_dirs` is non-empty; combine with write tools if both are configured
+- `execute_read_file(arguments, config)`: validate path, read and return UTF-8 content; silent (no user prompt)
+- `execute_list_dir(arguments, config)`: validate path, list immediate children or full tree based on `recursive` bool; return newline-separated paths
+- `execute_search(arguments, config)`: validate path, grep-style regex search over file or directory tree; return `file:lineno: line` matches with `context_lines` lines of surrounding context; separate match groups with `--`
+- `execute_get_definition(arguments, config)`: validate path (must be `.py`), use `ast.parse()` to locate top-level or nested symbol (`"MyClass"` or `"MyClass.my_method"`), extract full source including decorators via line numbers from AST nodes
+
+**`chat.py`**
+- `process()` tool loop: dispatch `read_file`, `list_dir`, `search`, `get_definition` to their executors alongside existing `write_file` dispatch
+- Read tool results are logged via `logger.log_tool_call` (same as write_file; `approved=True` always)
+
+**`repl.py`**
+- Add `/read add <path>` and `/read remove <path>` commands to `handle_command()`
+- Each prompts: `Add/Remove <resolved_path> from read_allowed_dirs? [y/N]`; on approval mutates `session.config.read_allowed_dirs`; changes are session-only
+
+### Red
+
+**`config.py`**
+- `read_allowed_dirs` defaults to `[]` when absent from YAML
+- Raises `ConfigError` when a `read_allowed_dirs` entry is non-absolute
+
+**`tools.py`**
+- `get_tools` returns read tool schemas when `read_allowed_dirs` is non-empty
+- `execute_read_file` returns error when path is outside allowed dirs
+- `execute_read_file` returns file content on success
+- `execute_list_dir` returns immediate children when `recursive=False`
+- `execute_list_dir` returns full tree when `recursive=True`
+- `execute_list_dir` returns error when path is outside allowed dirs or not a directory
+- `execute_search` returns error when path is outside allowed dirs
+- `execute_search` returns formatted matches with context for a file path
+- `execute_search` searches recursively when given a directory path
+- `execute_search` returns `"No matches found."` when pattern matches nothing
+- `execute_search` returns error on invalid regex
+- `execute_get_definition` returns error when path is outside allowed dirs
+- `execute_get_definition` returns full source of a top-level function/class
+- `execute_get_definition` returns full source of a method via `"Class.method"` syntax
+- `execute_get_definition` returns error when symbol not found
+- `execute_get_definition` returns error when file is not a `.py` file
+
+**`chat.py`**
+- Tool loop dispatches to all four read executors correctly
+
+**`repl.py`**
+- `/read add <path>` prompts and on `y` appends resolved path to `session.config.read_allowed_dirs`
+- `/read add <path>` on denial leaves `read_allowed_dirs` unchanged
+- `/read remove <path>` prompts and on `y` removes the path from `session.config.read_allowed_dirs`
+- `/read remove <path>` on unknown path prints an informative message
+- `/help` output includes `/read add` and `/read remove`
+
+### Green
+Apply all source changes listed above.
+
+### Refactor
+- Extract the `read_allowed_dirs` path-validation check into a shared helper used by all four read executors (mirrors `_is_allowed` already used by `execute_write_file`)
+
+---
+
 ## Phase 11 — Integration smoke test
 
 One end-to-end test with real files, mocked OpenAI API, and a real temp log directory:

@@ -352,6 +352,50 @@ def test_extract_md_block(tmp_path):
     assert out.read_text() == content
 
 
+# ---------------------------------------------------------------------------
+# handle_command — /read
+# ---------------------------------------------------------------------------
+
+def test_read_add_appends_path_on_approval(tmp_path):
+    session = _session()
+    session.config = MagicMock()
+    session.config.read_allowed_dirs = []
+    with patch("builtins.input", return_value="y"):
+        handle_command(f"/read add {tmp_path}", session)
+    assert tmp_path in session.config.read_allowed_dirs
+
+
+def test_read_add_does_not_append_on_denial(tmp_path):
+    session = _session()
+    session.config = MagicMock()
+    session.config.read_allowed_dirs = []
+    with patch("builtins.input", return_value="n"):
+        handle_command(f"/read add {tmp_path}", session)
+    assert session.config.read_allowed_dirs == []
+
+
+def test_read_remove_removes_path_on_approval(tmp_path):
+    session = _session()
+    session.config = MagicMock()
+    session.config.read_allowed_dirs = [tmp_path]
+    with patch("builtins.input", return_value="y"):
+        handle_command(f"/read remove {tmp_path}", session)
+    assert tmp_path not in session.config.read_allowed_dirs
+
+
+def test_read_remove_unknown_path_prints_message(tmp_path, capsys):
+    session = _session()
+    session.config = MagicMock()
+    session.config.read_allowed_dirs = []
+    handle_command(f"/read remove {tmp_path}", session)
+    assert capsys.readouterr().out.strip()
+
+
+def test_help_mentions_read(capsys):
+    handle_command("/help", _session())
+    assert "/read" in capsys.readouterr().out
+
+
 def test_extract_unknown_extension_prints_error(tmp_path, capsys):
     session = _session(history=[{"role": "assistant", "content": "```text\nhello\n```"}])
     out = tmp_path / "out.txt"

@@ -10,7 +10,14 @@ from pmca.config import Config
 from pmca.logger import SessionLogger
 from pmca.openai_client import chat_completion
 from pmca.rag.store import VectorStore
-from pmca.tools import execute_write_file, get_tools
+from pmca.tools import (
+    execute_get_definition,
+    execute_list_dir,
+    execute_read_file,
+    execute_search,
+    execute_write_file,
+    get_tools,
+)
 from pmca.types import Attachment, Chunk, ToolCallRequest
 
 
@@ -64,7 +71,7 @@ class ChatSession:
         response = chat_completion(messages, self.config, tools=tools)
 
         while isinstance(response, ToolCallRequest):
-            approved, result = execute_write_file(response.arguments, self.config)
+            approved, result = _dispatch_tool(response, self.config)
             self.logger.log_tool_call(
                 tool_call_id=response.tool_call_id,
                 name=response.name,
@@ -184,3 +191,19 @@ def _build_system_context(fields: list[str]) -> str | None:
             shell = os.environ.get("SHELL") or os.environ.get("COMSPEC", "unknown")
             lines.append(f"Shell: {shell}")
     return "\n".join(lines) if lines else None
+
+
+def _dispatch_tool(response: "ToolCallRequest", config: "Config") -> tuple[bool, str]:
+    name = response.name
+    args = response.arguments
+    if name == "write_file":
+        return execute_write_file(args, config)
+    if name == "read_file":
+        return True, execute_read_file(args, config)
+    if name == "list_dir":
+        return True, execute_list_dir(args, config)
+    if name == "search":
+        return True, execute_search(args, config)
+    if name == "get_definition":
+        return True, execute_get_definition(args, config)
+    return False, f"Error: unknown tool '{name}'"

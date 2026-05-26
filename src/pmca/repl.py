@@ -13,6 +13,8 @@ _HELP = """\
 Commands:
   /set chunksize=N            Set top-k RAG retrieval count for this session
   /set history_token_budget=N Set history token budget for this session
+  /read add <path>            Add a directory to read_allowed_dirs for this session
+  /read remove <path>         Remove a directory from read_allowed_dirs for this session
   /rag                        Print RAG chunks retrieved for the last query
   /extract <path>             Extract code blocks from last response into <path> (type inferred from extension)
   /clear                      Clear conversation history
@@ -97,6 +99,10 @@ def handle_command(cmd: str, session: ChatSession) -> None:
         print(f"Conversation history cleared. New session: {new_path}")
         return
 
+    if name == "/read":
+        _handle_read(parts[1] if len(parts) > 1 else "", session)
+        return
+
     print(f"Unknown command: {name}")
 
 
@@ -165,6 +171,35 @@ def _extract(arg: str, session: ChatSession) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("\n\n".join(b.rstrip("\n") for b in blocks))
     print(f"Wrote {len(blocks)} block(s) to {arg}")
+
+
+def _handle_read(arg: str, session) -> None:
+    parts = arg.strip().split(None, 1)
+    if len(parts) < 2 or parts[0] not in ("add", "remove"):
+        print("Error: usage: /read add <path> | /read remove <path>")
+        return
+
+    subcommand = parts[0]
+    target = Path(parts[1].strip()).resolve()
+
+    if subcommand == "add":
+        print(f"Add {target} to read_allowed_dirs? [y/N] ", end="", flush=True)
+        if input().strip().lower() != "y":
+            print("Cancelled.")
+            return
+        session.config.read_allowed_dirs.append(target)
+        print(f"Added: {target}")
+
+    elif subcommand == "remove":
+        if target not in session.config.read_allowed_dirs:
+            print(f"Not in read_allowed_dirs: {target}")
+            return
+        print(f"Remove {target} from read_allowed_dirs? [y/N] ", end="", flush=True)
+        if input().strip().lower() != "y":
+            print("Cancelled.")
+            return
+        session.config.read_allowed_dirs.remove(target)
+        print(f"Removed: {target}")
 
 
 def _trim_notice(n: int) -> str:
