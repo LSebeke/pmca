@@ -696,6 +696,8 @@ def handle_command(cmd: str, session: ChatSession) -> None:
     """
     /set <param>=<value>  — update session.history_token_budget or session.config.test_timeout
     /extract <path>       — write code blocks from last response to <path> (fence language inferred from extension)
+    /scratchpad           — print all scratchpad entries (title + content for each); print
+                            "Scratchpad is empty." when none exist
     /clear                — reset session.history;
                             call session.rotate_logger() (which resets _next_attachment_n,
                             session_attachments, and _scratchpad);
@@ -854,6 +856,7 @@ History trimming is lazy: the first `session.process()` call runs `_trim_history
 | `/set history_token_budget=N` | Set history token budget for this session |
 | `/set test_timeout=N` | Set test run timeout (seconds) for this session |
 | `/extract <path>` | Extract code blocks from the last response into `<path>`; fence language inferred from extension (`.py`, `.yaml`/`.yml`, `.json`, `.toml`, `.sh`) |
+| `/scratchpad` | Print all scratchpad entries (title + content); prints "Scratchpad is empty." if none exist |
 | `/clear` | Clear conversation history, session_attachments, and _scratchpad; rotate to a new log file (writes fresh system_prompt + startup_doc entries); print new log path |
 | `/help` | Print command reference and key bindings |
 | `/exit` | End session (also: Ctrl+C) |

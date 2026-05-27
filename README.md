@@ -207,6 +207,7 @@ The tool prompts for secrets review before injecting. Pass `--unsafe` on startup
 | `/read add <path>` | Add a directory to `read_allowed_dirs` for this session (requires approval) |
 | `/read remove <path>` | Remove a directory from `read_allowed_dirs` for this session (requires approval) |
 | `/extract <path>` | Extract code blocks from the last response into `<path>`; fence language inferred from extension (`.py`, `.yaml`/`.yml`, `.json`, `.toml`, `.sh`, `.md`) |
+| `/scratchpad` | Print all scratchpad entries (title + content); prints "Scratchpad is empty." if none |
 | `/clear` | Clear conversation history and scratchpad; rotate to a new log file |
 | `/help` | Print command reference and key bindings |
 | `/exit` | End session (also: Ctrl+C) |

@@ -382,3 +382,31 @@ def test_extract_unknown_extension_prints_error(tmp_path, capsys):
     err = capsys.readouterr().out
     assert ".txt" in err or "unsupported" in err.lower() or "supported" in err.lower()
     assert not out.exists()
+
+
+# ---------------------------------------------------------------------------
+# handle_command — /scratchpad
+# ---------------------------------------------------------------------------
+
+def test_scratchpad_empty_prints_message(capsys):
+    session = _session()
+    session._scratchpad = []
+    handle_command("/scratchpad", session)
+    assert "empty" in capsys.readouterr().out.lower()
+
+
+def test_scratchpad_shows_entry_title_and_content(capsys):
+    from pmca.types import ScratchpadEntry
+    session = _session()
+    session._scratchpad = [
+        ScratchpadEntry(title="my-note", content="important stuff"),
+    ]
+    handle_command("/scratchpad", session)
+    out = capsys.readouterr().out
+    assert "my-note" in out
+    assert "important stuff" in out
+
+
+def test_help_mentions_scratchpad(capsys):
+    handle_command("/help", _session())
+    assert "/scratchpad" in capsys.readouterr().out

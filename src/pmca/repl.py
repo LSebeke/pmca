@@ -7,7 +7,7 @@ from prompt_toolkit import PromptSession
 from prompt_toolkit.history import InMemoryHistory
 from prompt_toolkit.key_binding import KeyBindings
 
-from pmca.chat import ChatSession
+from pmca.chat import ChatSession, _format_scratchpad_entry
 
 _HELP = """\
 Commands:
@@ -16,6 +16,7 @@ Commands:
   /read add <path>            Add a directory to read_allowed_dirs for this session
   /read remove <path>         Remove a directory from read_allowed_dirs for this session
   /extract <path>             Extract code blocks from last response into <path> (type inferred from extension)
+  /scratchpad                 Show all scratchpad entries
   /clear                      Clear conversation history
   /help                       Print this help message
   /exit                       End session
@@ -88,6 +89,15 @@ def handle_command(cmd: str, session: ChatSession) -> None:
 
     if name == "/read":
         _handle_read(parts[1] if len(parts) > 1 else "", session)
+        return
+
+    if name == "/scratchpad":
+        entries = session._scratchpad
+        if not entries:
+            print("Scratchpad is empty.")
+        else:
+            for i, entry in enumerate(entries, start=1):
+                print(_format_scratchpad_entry(i, entry))
         return
 
     print(f"Unknown command: {name}")
