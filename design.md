@@ -313,12 +313,13 @@ class ChatSession:
     _next_attachment_n: int      # session-global counter for CONTEXT_<n> identifiers
     _system_context: str | None  # computed once at __init__ from config.system_context_fields; None if list is empty
     _turn_seen_chunks: set[tuple[Path, str]]  # (source_file, label) pairs already returned this turn; reset at start of each process()
+    _turn_read_files: set[Path]  # resolved paths read via read_file this turn; reset at start of each process(); gates edit_file and write_file on existing files
     _scratchpad: list[ScratchpadEntry]  # entries the LLM has saved from tool call returns; injected as [SCRATCHPAD_i] system messages each turn
 
     def process(self, user_input: str) -> str:
         """
         Full pipeline for one user turn:
-          1. Reset _turn_seen_chunks to empty set.
+          1. Reset _turn_seen_chunks and _turn_read_files to empty sets.
           2. Parse and resolve attachments (passing _next_attachment_n as start_n);
              substitute identifiers in message.
              Advance _next_attachment_n by len(attachments) on success only.
@@ -453,7 +454,7 @@ def execute_rag_query(
     Returns "No results found." when store is empty or all top-k results were already seen.
     """
 
-def execute_write_file(arguments: dict, config: Config) -> tuple[bool, str]:
+def execute_write_file(arguments: dict, config: Config, turn_read_files: set[Path]) -> tuple[bool, str]:
     """
     Validate path against config.write_allowed_dirs, prompt user for approval,
     and write the file if approved.
@@ -469,6 +470,11 @@ def execute_write_file(arguments: dict, config: Config) -> tuple[bool, str]:
       - Must be within one of config.write_allowed_dirs (use Path.is_relative_to())
       - If invalid: return (False, "Error: path ... is outside allowed directories: ...")
 
+    Read-before-write enforcement (existing files only):
+      - If the file already exists and its resolved path is not in turn_read_files:
+        return (False, "Error: <path> has not been read this turn. Call read_file first.")
+      - New files (path does not yet exist) are exempt from this check.
+
     On approval:
       - Create parent directories (mkdir -p)
       - Write content (UTF-8)
@@ -478,7 +484,7 @@ def execute_write_file(arguments: dict, config: Config) -> tuple[bool, str]:
       - Return (False, "Write denied by user. Path: /full/path")
     """
 
-def execute_edit_file(arguments: dict, config: Config) -> tuple[bool, str]:
+def execute_edit_file(arguments: dict, config: Config, turn_read_files: set[Path]) -> tuple[bool, str]:
     """
     Validate path against config.write_allowed_dirs, find old_string in the file,
     and replace it with new_string after user approval.
@@ -488,6 +494,10 @@ def execute_edit_file(arguments: dict, config: Config) -> tuple[bool, str]:
       - Must be within one of config.write_allowed_dirs
       - If invalid: return (False, "Error: path ... is outside allowed directories: ...")
       - File must exist: if not, return (False, "Error: file not found: ...")
+
+    Read-before-edit enforcement:
+      - If the resolved path is not in turn_read_files:
+        return (False, "Error: <path> has not been read this turn. Call read_file first.")
 
     String matching:
       - Count occurrences of old_string in file content
@@ -514,12 +524,14 @@ def execute_edit_file(arguments: dict, config: Config) -> tuple[bool, str]:
       - Return (False, "Edit denied by user. Path: /full/path")
     """
 
-def execute_read_file(arguments: dict, config: Config) -> str:
+def execute_read_file(arguments: dict, config: Config, turn_read_files: set[Path]) -> str:
     """
     Validate path against config.read_allowed_dirs, read and return the file content.
     No user prompt — reads are silent.
+    On success, adds the resolved path to turn_read_files (enabling subsequent edit_file
+    or write_file calls on the same path within this turn).
     Returns the UTF-8 content on success, or an error string if path is outside
-    allowed dirs, file not found, or I/O error.
+    allowed dirs, file not found, or I/O error. Does not add to turn_read_files on error.
     """
 
 def execute_list_dir(arguments: dict, config: Config) -> str:

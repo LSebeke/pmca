@@ -137,7 +137,7 @@ def test_get_tools_omits_save_to_scratchpad_when_no_tools_registered():
 def test_read_file_returns_error_when_outside_allowed_dirs(tmp_path):
     allowed = tmp_path / "allowed"
     cfg = _config(read_allowed_dirs=[allowed])
-    result = execute_read_file({"path": str(tmp_path / "secret.py")}, cfg)
+    result = execute_read_file({"path": str(tmp_path / "secret.py")}, cfg, set())
     assert "outside allowed" in result.lower()
 
 
@@ -147,15 +147,34 @@ def test_read_file_returns_content_on_success(tmp_path):
     f = allowed / "foo.py"
     f.write_text("x = 1\n")
     cfg = _config(read_allowed_dirs=[allowed])
-    assert execute_read_file({"path": str(f)}, cfg) == "x = 1\n"
+    assert execute_read_file({"path": str(f)}, cfg, set()) == "x = 1\n"
 
 
 def test_read_file_returns_error_when_file_not_found(tmp_path):
     allowed = tmp_path / "src"
     allowed.mkdir()
     cfg = _config(read_allowed_dirs=[allowed])
-    result = execute_read_file({"path": str(allowed / "missing.py")}, cfg)
+    result = execute_read_file({"path": str(allowed / "missing.py")}, cfg, set())
     assert "not found" in result.lower() or "error" in result.lower()
+
+
+def test_read_file_adds_path_to_turn_read_files_on_success(tmp_path):
+    allowed = tmp_path / "src"
+    allowed.mkdir()
+    f = allowed / "foo.py"
+    f.write_text("x = 1\n")
+    cfg = _config(read_allowed_dirs=[allowed])
+    turn_read_files: set[Path] = set()
+    execute_read_file({"path": str(f)}, cfg, turn_read_files)
+    assert f.resolve() in turn_read_files
+
+
+def test_read_file_does_not_add_path_on_error(tmp_path):
+    allowed = tmp_path / "allowed"
+    cfg = _config(read_allowed_dirs=[allowed])
+    turn_read_files: set[Path] = set()
+    execute_read_file({"path": str(tmp_path / "secret.py")}, cfg, turn_read_files)
+    assert len(turn_read_files) == 0
 
 
 # ---------------------------------------------------------------------------
@@ -336,7 +355,7 @@ def test_edit_file_returns_error_when_outside_allowed_dirs(tmp_path):
     allowed = tmp_path / "allowed"
     cfg = _config(write_allowed_dirs=[allowed])
     args = {"path": str(tmp_path / "sneaky.py"), "old_string": "x", "new_string": "y", "description": "t"}
-    ok, msg = execute_edit_file(args, cfg)
+    ok, msg = execute_edit_file(args, cfg, set())
     assert ok is False
     assert "outside allowed" in msg.lower()
 
@@ -344,9 +363,20 @@ def test_edit_file_returns_error_when_outside_allowed_dirs(tmp_path):
 def test_edit_file_returns_error_when_file_not_found(tmp_path):
     cfg = _config(write_allowed_dirs=[tmp_path])
     args = {"path": str(tmp_path / "missing.py"), "old_string": "x", "new_string": "y", "description": "t"}
-    ok, msg = execute_edit_file(args, cfg)
+    ok, msg = execute_edit_file(args, cfg, set())
     assert ok is False
     assert "not found" in msg.lower()
+
+
+def test_edit_file_returns_error_when_not_read_this_turn(tmp_path):
+    f = tmp_path / "code.py"
+    f.write_text("x = 1\n")
+    cfg = _config(write_allowed_dirs=[tmp_path])
+    args = {"path": str(f), "old_string": "x = 1", "new_string": "x = 2", "description": "t"}
+    ok, msg = execute_edit_file(args, cfg, set())
+    assert ok is False
+    assert "read_file" in msg
+    assert str(f.resolve()) in msg
 
 
 def test_edit_file_returns_error_when_old_string_not_found(tmp_path):
@@ -354,7 +384,7 @@ def test_edit_file_returns_error_when_old_string_not_found(tmp_path):
     f.write_text("x = 1\n")
     cfg = _config(write_allowed_dirs=[tmp_path])
     args = {"path": str(f), "old_string": "zzz_no_such_string", "new_string": "y", "description": "t"}
-    ok, msg = execute_edit_file(args, cfg)
+    ok, msg = execute_edit_file(args, cfg, {f.resolve()})
     assert ok is False
     assert "not found" in msg.lower()
 
@@ -364,7 +394,7 @@ def test_edit_file_returns_error_when_old_string_is_ambiguous(tmp_path):
     f.write_text("x = 1\nx = 1\n")
     cfg = _config(write_allowed_dirs=[tmp_path])
     args = {"path": str(f), "old_string": "x = 1", "new_string": "y = 2", "description": "t"}
-    ok, msg = execute_edit_file(args, cfg)
+    ok, msg = execute_edit_file(args, cfg, {f.resolve()})
     assert ok is False
     assert "ambiguous" in msg.lower()
     assert "2" in msg
@@ -377,7 +407,7 @@ def test_edit_file_prints_approval_prompt(tmp_path, capsys):
     args = {"path": str(f), "old_string": "x = 1", "new_string": "x = 2", "description": "increment x"}
 
     with patch("builtins.input", return_value="n"):
-        execute_edit_file(args, cfg)
+        execute_edit_file(args, cfg, {f.resolve()})
 
     out = capsys.readouterr().out
     assert str(f.resolve()) in out
@@ -395,7 +425,7 @@ def test_edit_file_returns_denial_when_user_denies(tmp_path):
     args = {"path": str(f), "old_string": "x = 1", "new_string": "x = 2", "description": "t"}
 
     with patch("builtins.input", return_value="n"):
-        ok, msg = execute_edit_file(args, cfg)
+        ok, msg = execute_edit_file(args, cfg, {f.resolve()})
 
     assert ok is False
     assert "Edit denied by user" in msg
@@ -409,7 +439,7 @@ def test_edit_file_replaces_and_writes_on_approval(tmp_path):
     args = {"path": str(f), "old_string": "x = 1", "new_string": "x = 99", "description": "t"}
 
     with patch("builtins.input", return_value="y"):
-        ok, msg = execute_edit_file(args, cfg)
+        ok, msg = execute_edit_file(args, cfg, {f.resolve()})
 
     assert ok is True
     assert "Edited:" in msg
@@ -424,7 +454,7 @@ def test_edit_file_replaces_only_first_when_one_occurrence(tmp_path):
     args = {"path": str(f), "old_string": "a = 1", "new_string": "a = 42", "description": "t"}
 
     with patch("builtins.input", return_value="y"):
-        execute_edit_file(args, cfg)
+        execute_edit_file(args, cfg, {f.resolve()})
 
     assert f.read_text() == "a = 42\nb = 2\n"
 
@@ -438,7 +468,7 @@ def test_execute_rejects_path_outside_allowed_dirs(tmp_path):
     cfg = _config(write_allowed_dirs=[allowed])
     args = {"path": str(tmp_path / "sneaky" / "file.py"), "content": "x", "description": "test"}
 
-    approved, result = execute_write_file(args, cfg)
+    approved, result = execute_write_file(args, cfg, set())
 
     assert approved is False
     assert "outside allowed" in result.lower()
@@ -456,7 +486,7 @@ def test_execute_denies_when_user_inputs_not_y(tmp_path):
     args = {"path": str(target), "content": "x = 1", "description": "Initial module"}
 
     with patch("builtins.input", return_value="n"):
-        approved, result = execute_write_file(args, cfg)
+        approved, result = execute_write_file(args, cfg, set())
 
     assert approved is False
     assert str(target.resolve()) in result
@@ -470,7 +500,7 @@ def test_execute_denial_message_contains_path(tmp_path):
     args = {"path": str(target), "content": "x", "description": "test"}
 
     with patch("builtins.input", return_value=""):
-        approved, result = execute_write_file(args, cfg)
+        approved, result = execute_write_file(args, cfg, set())
 
     assert "Write denied by user" in result
     assert str(target.resolve()) in result
@@ -488,7 +518,7 @@ def test_execute_prints_approval_prompt(tmp_path, capsys):
     args = {"path": str(target), "content": "x = 1\n", "description": "My module"}
 
     with patch("builtins.input", return_value="n"):
-        execute_write_file(args, cfg)
+        execute_write_file(args, cfg, set())
 
     out = capsys.readouterr().out
     assert str(target.resolve()) in out
@@ -505,10 +535,38 @@ def test_execute_prompt_warns_when_file_exists(tmp_path, capsys):
     args = {"path": str(target), "content": "new content", "description": "replace"}
 
     with patch("builtins.input", return_value="n"):
-        execute_write_file(args, cfg)
+        execute_write_file(args, cfg, {target.resolve()})
 
     out = capsys.readouterr().out
     assert "will be overwritten" in out
+
+
+def test_write_file_returns_error_when_existing_file_not_read_this_turn(tmp_path):
+    allowed = tmp_path / "output"
+    allowed.mkdir()
+    target = allowed / "existing.py"
+    target.write_text("old content")
+    cfg = _config(write_allowed_dirs=[allowed])
+    args = {"path": str(target), "content": "new content", "description": "replace"}
+
+    approved, result = execute_write_file(args, cfg, set())
+
+    assert approved is False
+    assert "read_file" in result
+    assert str(target.resolve()) in result
+
+
+def test_write_file_allows_new_file_without_prior_read(tmp_path):
+    allowed = tmp_path / "output"
+    allowed.mkdir()
+    target = allowed / "new.py"  # does not exist
+    cfg = _config(write_allowed_dirs=[allowed])
+    args = {"path": str(target), "content": "x = 1\n", "description": "new file"}
+
+    with patch("builtins.input", return_value="y"):
+        approved, _ = execute_write_file(args, cfg, set())
+
+    assert approved is True
 
 
 # ---------------------------------------------------------------------------
@@ -523,7 +581,7 @@ def test_execute_writes_file_when_approved(tmp_path):
     args = {"path": str(target), "content": "x = 42\n", "description": "Answer"}
 
     with patch("builtins.input", return_value="y"):
-        approved, result = execute_write_file(args, cfg)
+        approved, result = execute_write_file(args, cfg, set())
 
     assert approved is True
     assert target.read_text() == "x = 42\n"
@@ -538,7 +596,7 @@ def test_execute_success_result_contains_path_and_size(tmp_path):
     args = {"path": str(target), "content": content, "description": "Answer"}
 
     with patch("builtins.input", return_value="y"):
-        approved, result = execute_write_file(args, cfg)
+        approved, result = execute_write_file(args, cfg, set())
 
     assert "Written:" in result
     assert str(target.resolve()) in result
@@ -552,7 +610,7 @@ def test_execute_creates_parent_directories(tmp_path):
     args = {"path": str(target), "content": "pass\n", "description": "nested"}
 
     with patch("builtins.input", return_value="y"):
-        approved, _ = execute_write_file(args, cfg)
+        approved, _ = execute_write_file(args, cfg, set())
 
     assert approved is True
     assert target.exists()

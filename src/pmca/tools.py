@@ -339,7 +339,7 @@ def execute_save_to_scratchpad(
     return " ".join(parts)
 
 
-def execute_write_file(arguments: dict, config: Config) -> tuple[bool, str]:
+def execute_write_file(arguments: dict, config: Config, turn_read_files: set[Path]) -> tuple[bool, str]:
     raw_path = arguments["path"]
     content = arguments["content"]
     reason = arguments.get("description", "")
@@ -349,6 +349,9 @@ def execute_write_file(arguments: dict, config: Config) -> tuple[bool, str]:
     if not _is_allowed(target, config.write_allowed_dirs):
         dirs_str = ", ".join(str(d) for d in config.write_allowed_dirs)
         return False, f"Error: path {target} is outside allowed directories: {dirs_str}"
+
+    if target.exists() and target not in turn_read_files:
+        return False, f"Error: {target} has not been read this turn. Call read_file first."
 
     size = len(content.encode())
     exists_msg = "File exists — will be overwritten." if target.exists() else "File does not exist."
@@ -366,7 +369,7 @@ def execute_write_file(arguments: dict, config: Config) -> tuple[bool, str]:
     return True, f"Written: {target} ({size} bytes)"
 
 
-def execute_edit_file(arguments: dict, config: Config) -> tuple[bool, str]:
+def execute_edit_file(arguments: dict, config: Config, turn_read_files: set[Path]) -> tuple[bool, str]:
     raw_path = arguments["path"]
     old_string = arguments["old_string"]
     new_string = arguments["new_string"]
@@ -380,6 +383,9 @@ def execute_edit_file(arguments: dict, config: Config) -> tuple[bool, str]:
 
     if not target.exists():
         return False, f"Error: file not found: {target}"
+
+    if target not in turn_read_files:
+        return False, f"Error: {target} has not been read this turn. Call read_file first."
 
     try:
         content = target.read_text(encoding="utf-8")
@@ -414,7 +420,7 @@ def execute_edit_file(arguments: dict, config: Config) -> tuple[bool, str]:
     return True, f"Edited: {target}"
 
 
-def execute_read_file(arguments: dict, config: Config) -> str:
+def execute_read_file(arguments: dict, config: Config, turn_read_files: set[Path]) -> str:
     target = Path(arguments["path"]).resolve()
 
     if not _is_allowed(target, config.read_allowed_dirs):
@@ -422,7 +428,9 @@ def execute_read_file(arguments: dict, config: Config) -> str:
         return f"Error: path {target} is outside allowed directories: {dirs_str}"
 
     try:
-        return target.read_text(encoding="utf-8")
+        content = target.read_text(encoding="utf-8")
+        turn_read_files.add(target)
+        return content
     except FileNotFoundError:
         return f"Error: file not found: {target}"
     except OSError as e:

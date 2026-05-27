@@ -44,12 +44,14 @@ class ChatSession:
         self._next_attachment_n: int = 1
         self.session_attachments: list[Attachment] = []
         self._turn_seen_chunks: set[tuple] = set()
+        self._turn_read_files: set[Path] = set()
         self._scratchpad: list[ScratchpadEntry] = []
         self._system_context: str | None = _build_system_context(config.system_context_fields)
 
     def process(self, user_input: str) -> tuple[str | None, int]:
-        # 1. Reset per-turn RAG deduplication state
+        # 1. Reset per-turn state
         self._turn_seen_chunks = set()
+        self._turn_read_files = set()
         _scratchpad_before = len(self._scratchpad)
 
         # 2. Attachments
@@ -142,11 +144,11 @@ class ChatSession:
             result = execute_save_to_scratchpad(args, self.config, self._scratchpad)
             return True, result
         if name == "write_file":
-            return execute_write_file(args, self.config)
+            return execute_write_file(args, self.config, self._turn_read_files)
         if name == "edit_file":
-            return execute_edit_file(args, self.config)
+            return execute_edit_file(args, self.config, self._turn_read_files)
         if name == "read_file":
-            return True, execute_read_file(args, self.config)
+            return True, execute_read_file(args, self.config, self._turn_read_files)
         if name == "list_dir":
             return True, execute_list_dir(args, self.config)
         if name == "search":
