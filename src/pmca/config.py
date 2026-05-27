@@ -55,7 +55,7 @@ def load_config(config_name: str) -> Config:
     _validate_write_allowed_dirs(data.get("write_allowed_dirs") or [])
     _validate_read_allowed_dirs(data.get("read_allowed_dirs") or [])
     _validate_test_dir(data.get("test_dir"))
-    _validate_rag_depth_k(data)
+    _validate_positive_ints(data)
 
     return Config(
         name=data["name"],
@@ -134,8 +134,12 @@ def _validate_test_dir(value: str | None) -> None:
         raise ConfigError(f"test_dir must be an absolute path, got: {value}")
 
 
-def _validate_rag_depth_k(data: dict) -> None:
-    for field_name in ("rag_shallow_k", "rag_medium_k", "rag_deep_k", "max_scratchpad_entries"):
+def _validate_positive_ints(data: dict) -> None:
+    fields = (
+        "rag_shallow_k", "rag_medium_k", "rag_deep_k",
+        "max_scratchpad_entries", "max_attachment_kb", "history_token_budget",
+    )
+    for field_name in fields:
         value = data.get(field_name)
         if value is not None and value <= 0:
             raise ConfigError(f"{field_name} must be a positive integer, got: {value}")

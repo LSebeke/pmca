@@ -356,6 +356,47 @@ def test_process_does_not_append_history_on_abort():
     assert session.history == []
 
 
+def test_process_returns_none_and_zero_on_attachment_error():
+    session, store, _ = _make_session()
+    from pmca.attachments import AttachmentError
+
+    with patch("pmca.chat.parse_attachment_paths", side_effect=AttachmentError("file not found: /bad.py")):
+        result = session.process("hi [[/bad.py]]")
+
+    assert result == (None, 0)
+
+
+def test_process_does_not_append_history_on_attachment_error():
+    session, store, _ = _make_session()
+    from pmca.attachments import AttachmentError
+
+    with patch("pmca.chat.parse_attachment_paths", side_effect=AttachmentError("file not found: /bad.py")):
+        session.process("hi [[/bad.py]]")
+
+    assert session.history == []
+
+
+def test_process_does_not_log_on_attachment_error():
+    session, store, logger = _make_session()
+    from pmca.attachments import AttachmentError
+
+    with patch("pmca.chat.parse_attachment_paths", side_effect=AttachmentError("file not found: /bad.py")):
+        session.process("hi [[/bad.py]]")
+
+    logger.log_exchange.assert_not_called()
+
+
+def test_process_prints_error_message_on_attachment_error(capsys):
+    session, store, _ = _make_session()
+    from pmca.attachments import AttachmentError
+
+    with patch("pmca.chat.parse_attachment_paths", side_effect=AttachmentError("file not found: /bad.py")):
+        session.process("hi [[/bad.py]]")
+
+    out = capsys.readouterr().out
+    assert "file not found: /bad.py" in out
+
+
 # ---------------------------------------------------------------------------
 # process() — session_attachments persistence
 # ---------------------------------------------------------------------------

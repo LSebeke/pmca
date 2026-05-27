@@ -5,7 +5,7 @@ import platform
 from datetime import datetime, timezone
 from pathlib import Path
 
-from pmca.attachments import AttachmentAborted, parse_attachment_paths, resolve_attachments, substitute_identifiers
+from pmca.attachments import AttachmentAborted, AttachmentError, parse_attachment_paths, resolve_attachments, substitute_identifiers
 from pmca.config import Config
 from pmca.logger import SessionLogger
 from pmca.openai_client import chat_completion
@@ -58,6 +58,9 @@ class ChatSession:
             attachments = resolve_attachments(paths, self.config.max_attachment_kb, self.unsafe, start_n=self._next_attachment_n)
         except AttachmentAborted:
             print("[message cancelled]")
+            return None, 0
+        except AttachmentError as exc:
+            print(str(exc))
             return None, 0
 
         self._next_attachment_n += len(attachments)

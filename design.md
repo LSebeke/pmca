@@ -20,6 +20,7 @@ pmca/
 ├── openai_client.py    # OpenAI API calls with retry logic
 ├── logger.py           # JSONL chat log + debug log writer
 ├── resume.py           # JSONL resume: parse log, validate, extract history + context
+├── types.py            # Shared dataclasses: Chunk, Attachment, ScratchpadEntry, ToolCallRequest
 └── rag/
     ├── chunker.py      # File → Chunk list (semantic / AST-based)
     ├── embedder.py     # Thin embed() interface over OpenAI embeddings
@@ -40,6 +41,7 @@ class Config:
     system_prompt: str
     rag_files: list[Path]        # absolute paths only, validated at load time
     log_folder: Path
+    startup_docs: list[tuple[Path, str]] = field(default_factory=list)  # (path, content) pairs; loaded at config parse time
     write_allowed_dirs: list[Path] = field(default_factory=list)  # absolute paths; empty → write_file tool not registered
     read_allowed_dirs: list[Path] = field(default_factory=list)   # absolute paths; empty → read_file/list_dir/search tools not registered
     system_context_fields: list[str] = field(default_factory=list)  # empty by default → no system context injected
@@ -165,9 +167,8 @@ def load_config(config_name: str) -> Config:
 Validation rules:
 - All `rag_files` paths must be absolute, exist, and be readable
 - `log_folder` must be absolute (created if absent)
-- `OPENAI_API_KEY` must be present in environment
-- `rag_shallow_k`, `rag_medium_k`, `rag_deep_k` must be positive integers if provided (defaults 3, 7, 15)
-- `max_attachment_kb` and `history_token_budget` must be positive integers if provided
+- `OPENAI_API_KEY` must be present in environment (checked in `cli.py`)
+- `rag_shallow_k`, `rag_medium_k`, `rag_deep_k`, `max_scratchpad_entries`, `max_attachment_kb`, and `history_token_budget` must be positive integers if provided
 - All `write_allowed_dirs` paths must be absolute (existence not required — dirs may be created later)
 - All `read_allowed_dirs` paths must be absolute (existence not required)
 
@@ -240,9 +241,10 @@ Each `.pkl` file contains:
 class VectorStore:
     def build(self, files: list[Path], cache_dir: Path) -> None:
         """
-        For each file: load cache entry if present and file hash matches;
-        otherwise chunk + embed + write cache. Prints progress to stderr
-        (e.g. "[RAG] embedding 3 new/changed files...").
+        Pre-passes over files to count stale/missing cache entries, prints
+        "[RAG] embedding N new/changed file(s)..." to stderr before embedding begins.
+        For each file: loads cache entry if present and file hash matches;
+        otherwise chunks + embeds + writes cache.
         Assembles all chunks and embeddings into contiguous numpy arrays.
         """
 
@@ -345,7 +347,7 @@ class ChatSession:
         Close the current logger, open a new one with a fresh timestamp in
         config.log_folder, write session-start entries (system_prompt, startup_docs),
         assign it to self.logger, and return the path of the new JSONL file.
-        Also resets _next_attachment_n to 1 and session_attachments to [].
+        Also resets _next_attachment_n to 1, session_attachments to [], and _scratchpad to [].
         """
 
     def _trim_history(self) -> int:
@@ -394,10 +396,8 @@ def get_tools(config: Config, store: VectorStore) -> list[dict] | None:
     """
     Returns the full tools list to pass to chat_completion, or None if no tools
     are enabled.
-    query_knowledge_base and save_to_scratchpad are included when store has indexed content
-    (store._chunks is non-empty) OR when read_allowed_dirs is non-empty (scratchpad is useful
-    whenever tool call returns exist).
-    save_to_scratchpad is always included when any other tool is registered.
+    query_knowledge_base is included when store has indexed content (store._chunks is non-empty).
+    save_to_scratchpad is included whenever any other tool is registered.
     write_file and edit_file are included when write_allowed_dirs is non-empty.
     read_file, list_dir, search, and get_definition are included when read_allowed_dirs is non-empty.
     run_tests is included when test_dir is not None.
@@ -616,6 +616,16 @@ class SessionLogger:
     ) -> None:
         """Appends two {"type": "exchange", ...} lines: one user entry, one assistant entry."""
 
+    def log_tool_call(
+        self,
+        tool_call_id: str,
+        name: str,
+        arguments: dict,
+        approved: bool,
+        result: str,
+    ) -> None:
+        """Appends one {"type": "tool_call", ...} line per tool call within a turn."""
+
     def log_debug(self, message: str) -> None:
         """Appends timestamped line to debug log."""
 
@@ -686,9 +696,9 @@ def handle_command(cmd: str, session: ChatSession) -> None:
     """
     /set <param>=<value>  — update session.history_token_budget or session.config.test_timeout
     /extract <path>       — write code blocks from last response to <path> (fence language inferred from extension)
-    /clear                — reset session.history, session._next_attachment_n (to 1),
-                            and session._scratchpad;
-                            call session.rotate_logger();
+    /clear                — reset session.history;
+                            call session.rotate_logger() (which resets _next_attachment_n,
+                            session_attachments, and _scratchpad);
                             print "Conversation history cleared. New session: <path>"
     /help                 — print command reference
     /exit                 — raise SystemExit
@@ -700,6 +710,7 @@ _EXT_TO_FENCE: dict[str, str] = {
     ".json": "json",
     ".toml": "toml",
     ".sh": "bash",
+    ".md": "markdown",
 }
 
 def _extract(cmd: str, session: ChatSession) -> None:

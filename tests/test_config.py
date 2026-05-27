@@ -530,3 +530,18 @@ def test_max_scratchpad_entries_raises_when_nonpositive(tmp_path):
     cfg_path = write_yaml(tmp_path, "c.yaml", yaml_content)
     with pytest.raises(ConfigError, match="max_scratchpad_entries"):
         load_config(str(cfg_path))
+
+
+@pytest.mark.parametrize("field,value", [
+    ("max_attachment_kb", 0),
+    ("max_attachment_kb", -1),
+    ("history_token_budget", 0),
+    ("history_token_budget", -100),
+])
+def test_positive_int_fields_raise_when_nonpositive(tmp_path, field, value):
+    rag_file = tmp_path / "code.py"
+    rag_file.write_text("x = 1")
+    yaml_content = minimal_yaml(rag_file, tmp_path / "logs") + f"{field}: {value}\n"
+    cfg_path = write_yaml(tmp_path, "c.yaml", yaml_content)
+    with pytest.raises(ConfigError, match=field):
+        load_config(str(cfg_path))

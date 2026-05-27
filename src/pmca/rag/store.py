@@ -22,7 +22,10 @@ class VectorStore:
     def build(self, files: list[Path], cache_dir: Path) -> None:
         all_chunks: list[Chunk] = []
         all_embeddings: list[np.ndarray] = []
-        new_count = 0
+
+        stale = [p for p in files if _load_cache(p, cache_dir) is None]
+        if stale:
+            print(f"[RAG] embedding {len(stale)} new/changed file(s)...", file=sys.stderr)
 
         for path in files:
             cached = _load_cache(path, cache_dir)
@@ -31,7 +34,6 @@ class VectorStore:
                 all_embeddings.append(cached["embeddings"])
                 continue
 
-            new_count += 1
             chunks = chunk_file(path)
             if not chunks:
                 continue
@@ -40,9 +42,6 @@ class VectorStore:
             _save_cache(path, chunks, embeddings, cache_dir)
             all_chunks.extend(chunks)
             all_embeddings.append(embeddings)
-
-        if new_count:
-            print(f"[RAG] embedding {new_count} new/changed file(s)...", file=sys.stderr)
 
         self._chunks = all_chunks
         self._embeddings = np.vstack(all_embeddings) if all_embeddings else np.empty((0, _DIMS), dtype=np.float32)
