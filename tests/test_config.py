@@ -509,24 +509,3 @@ def test_rag_depth_field_raises_when_non_positive(tmp_path, field):
     cfg_path = write_yaml(tmp_path, "c.yaml", yaml_content)
     with pytest.raises(ConfigError, match=field):
         load_config(str(cfg_path))
-
-
-# ---------------------------------------------------------------------------
-# max_retained_chunks
-# ---------------------------------------------------------------------------
-
-def test_max_retained_chunks_defaults_to_20(tmp_path):
-    rag_file = tmp_path / "code.py"
-    rag_file.write_text("x = 1")
-    cfg_path = write_yaml(tmp_path, "c.yaml", minimal_yaml(rag_file, tmp_path / "logs"))
-    cfg = load_config(str(cfg_path))
-    assert cfg.max_retained_chunks == 20
-
-
-def test_max_retained_chunks_raises_when_non_positive(tmp_path):
-    rag_file = tmp_path / "code.py"
-    rag_file.write_text("x = 1")
-    yaml_content = minimal_yaml(rag_file, tmp_path / "logs") + "max_retained_chunks: 0\n"
-    cfg_path = write_yaml(tmp_path, "c.yaml", yaml_content)
-    with pytest.raises(ConfigError, match="max_retained_chunks"):
-        load_config(str(cfg_path))

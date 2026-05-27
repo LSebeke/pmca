@@ -32,7 +32,6 @@ class Config:
     rag_shallow_k: int = 3
     rag_medium_k: int = 7
     rag_deep_k: int = 15
-    max_retained_chunks: int = 20
     temperature: float | None = None
     max_tokens: int | None = None
     top_p: float | None = None
@@ -56,7 +55,6 @@ def load_config(config_name: str) -> Config:
     _validate_read_allowed_dirs(data.get("read_allowed_dirs") or [])
     _validate_test_dir(data.get("test_dir"))
     _validate_rag_depth_k(data)
-    _validate_max_retained_chunks(data)
 
     return Config(
         name=data["name"],
@@ -75,7 +73,6 @@ def load_config(config_name: str) -> Config:
         rag_shallow_k=data.get("rag_shallow_k", 3),
         rag_medium_k=data.get("rag_medium_k", 7),
         rag_deep_k=data.get("rag_deep_k", 15),
-        max_retained_chunks=data.get("max_retained_chunks", 20),
         temperature=data.get("temperature"),
         max_tokens=data.get("max_tokens"),
         top_p=data.get("top_p"),
@@ -140,12 +137,6 @@ def _validate_rag_depth_k(data: dict) -> None:
         value = data.get(field_name)
         if value is not None and value <= 0:
             raise ConfigError(f"{field_name} must be a positive integer, got: {value}")
-
-
-def _validate_max_retained_chunks(data: dict) -> None:
-    value = data.get("max_retained_chunks")
-    if value is not None and value <= 0:
-        raise ConfigError(f"max_retained_chunks must be a positive integer, got: {value}")
 
 
 def _validate_rag_files(paths: list[str]) -> None:

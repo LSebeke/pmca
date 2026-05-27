@@ -14,7 +14,6 @@ from pmca.tools import (
     execute_edit_file,
     execute_get_definition,
     execute_list_dir,
-    execute_manage_rag_retention,
     execute_rag_query,
     execute_read_file,
     execute_run_tests,
@@ -44,13 +43,11 @@ class ChatSession:
         self._next_attachment_n: int = 1
         self.session_attachments: list[Attachment] = []
         self._turn_seen_chunks: set[tuple] = set()
-        self._retained_chunks: list = []
         self._system_context: str | None = _build_system_context(config.system_context_fields)
 
     def process(self, user_input: str) -> tuple[str | None, int]:
         # 1. Reset per-turn RAG deduplication state
         self._turn_seen_chunks = set()
-        _retained_before = len(self._retained_chunks)
 
         # 2. Attachments
         try:
@@ -102,11 +99,6 @@ class ChatSession:
         self.history.append({"role": "assistant", "content": response})
         self.logger.log_exchange(message, response, attachments)
 
-        # 6. Print retained-chunks summary if set changed this turn
-        if len(self._retained_chunks) != _retained_before:
-            files = {c.source_file for c in self._retained_chunks}
-            print(f"[Retained RAG: {len(self._retained_chunks)} chunk(s) from {len(files)} file(s)]")
-
         return response, turns_dropped
 
     def rotate_logger(self) -> Path:
@@ -116,7 +108,6 @@ class ChatSession:
         self.logger.log_session_start(self.system_prompt, self.startup_docs)
         self._next_attachment_n = 1
         self.session_attachments = []
-        self._retained_chunks = []
         return self.config.log_folder / f"chat_{timestamp}.jsonl"
 
     def _trim_history(self) -> int:
@@ -135,9 +126,6 @@ class ChatSession:
         args = response.arguments
         if name == "query_knowledge_base":
             result = execute_rag_query(args, self.config, self.store, self._turn_seen_chunks)
-            return True, result
-        if name == "manage_rag_retention":
-            result = execute_manage_rag_retention(args, self.config, self.store, self._retained_chunks)
             return True, result
         if name == "write_file":
             return execute_write_file(args, self.config)
@@ -170,9 +158,6 @@ class ChatSession:
         for att in self.session_attachments:
             messages.append({"role": "system", "content": _format_attachment(att)})
 
-        for i, chunk in enumerate(self._retained_chunks, start=1):
-            messages.append({"role": "system", "content": _format_retained_chunk(i, chunk)})
-
         messages.extend(self.history)
         messages.append({"role": "user", "content": user_message})
 
@@ -186,10 +171,6 @@ def _format_startup_doc(path: Path, content: str) -> str:
 def _format_attachment(att: Attachment) -> str:
     suffix = att.path.suffix.lstrip(".")
     return f"[{att.identifier}]\nFile: {att.path}\nType: {suffix}\n---\n{att.content}\n---"
-
-
-def _format_retained_chunk(i: int, chunk) -> str:
-    return f"[RETAINED_{i}]\nFile: {chunk.source_file}\nChunk: {chunk.label}\n---\n{chunk.content}\n---"
 
 
 _CONTEXT_ORDER = ("datetime", "os", "shell")

@@ -131,49 +131,6 @@ _GET_DEFINITION_SCHEMA = {
 }
 
 
-_MANAGE_RAG_RETENTION_SCHEMA = {
-    "type": "function",
-    "function": {
-        "name": "manage_rag_retention",
-        "description": "Retain or release specific RAG chunks across turns. Releases are applied before retains so a swap stays within the cap.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "retain": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "file": {"type": "string", "description": "Absolute path of the source file."},
-                            "label": {"type": "string", "description": "Chunk label as returned by query_knowledge_base."},
-                        },
-                        "required": ["file", "label"],
-                        "additionalProperties": False,
-                    },
-                    "description": "Chunks to pin for the rest of the session.",
-                    "default": [],
-                },
-                "release": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "file": {"type": "string", "description": "Absolute path of the source file."},
-                            "label": {"type": "string", "description": "Chunk label."},
-                        },
-                        "required": ["file", "label"],
-                        "additionalProperties": False,
-                    },
-                    "description": "Previously retained chunks to unpin.",
-                    "default": [],
-                },
-            },
-            "required": [],
-            "additionalProperties": False,
-        },
-    },
-}
-
 _RAG_SCHEMA = {
     "type": "function",
     "function": {
@@ -207,7 +164,6 @@ def get_tools(config: Config, store: VectorStore) -> list[dict] | None:
                 "description": "Search the project knowledge base for relevant code or documentation. Use depth='shallow' first; call again with 'medium' or 'deep' to retrieve additional results.",
             },
         })
-        tools.append(_MANAGE_RAG_RETENTION_SCHEMA)
 
     if config.write_allowed_dirs:
         dirs_str = ", ".join(str(d) for d in config.write_allowed_dirs)
@@ -251,60 +207,6 @@ def get_tools(config: Config, store: VectorStore) -> list[dict] | None:
         })
 
     return tools if tools else None
-
-
-def execute_manage_rag_retention(
-    arguments: dict,
-    config: "Config",
-    store: "VectorStore",
-    retained_chunks: list,
-) -> str:
-    retain_keys = [(item["file"], item["label"]) for item in arguments.get("retain", [])]
-    release_keys = [(item["file"], item["label"]) for item in arguments.get("release", [])]
-
-    # 1. Releases first
-    released_count = 0
-    if release_keys:
-        release_set = {(Path(f), l) for f, l in release_keys}
-        before = len(retained_chunks)
-        retained_chunks[:] = [
-            c for c in retained_chunks
-            if (c.source_file, c.label) not in release_set
-        ]
-        released_count = before - len(retained_chunks)
-
-    # 2. Validate retains against store
-    store_index = {(c.source_file, c.label): c for c in store._chunks}
-    already_retained = {(c.source_file, c.label) for c in retained_chunks}
-    new_chunks = []
-    for file_str, label in retain_keys:
-        key = (Path(file_str), label)
-        if key in already_retained:
-            continue
-        if key not in store_index:
-            return f"Error: chunk not found in store — file: {file_str}, label: {label}"
-        new_chunks.append(store_index[key])
-
-    # 3. Cap check (atomic)
-    if len(retained_chunks) + len(new_chunks) > config.max_retained_chunks:
-        free = config.max_retained_chunks - len(retained_chunks)
-        return (
-            f"Error: cap is {config.max_retained_chunks}; "
-            f"{len(retained_chunks)} slot(s) used, {free} free — "
-            f"cannot retain {len(new_chunks)} chunk(s). Release some first."
-        )
-
-    retained_chunks.extend(new_chunks)
-
-    # 4. Summary
-    files = {c.source_file for c in retained_chunks}
-    parts = []
-    if released_count:
-        parts.append(f"Released {released_count} chunk(s).")
-    if new_chunks:
-        parts.append(f"Retained {len(new_chunks)} new chunk(s).")
-    parts.append(f"[Retained RAG: {len(retained_chunks)} chunk(s) from {len(files)} file(s)]")
-    return " ".join(parts)
 
 
 def execute_rag_query(

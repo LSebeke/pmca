@@ -24,7 +24,7 @@ The sample configs document the field via a commented-out line so users are awar
 
 ---
 
-## Finding 2 — HIGH: RAG chunks accumulate silently and grow without bound ✅ RESOLVED
+## Finding 2 — HIGH: RAG chunks accumulate silently and grow without bound
 
 **Location:** `src/pmca/chat.py:58–60, 142–148`
 
@@ -38,8 +38,6 @@ The sample configs document the field via a commented-out line so users are awar
 - Show a chunk count after each response, e.g. `[RAG context: 7 chunks from 3 files]`.
 - Add a hard cap on `session_rag_chunks` (configurable, e.g. `max_rag_context_chunks`).
 - Add a `/rag-clear` command that evicts accumulated chunks without clearing conversation history (currently `/clear` does both, so users avoid it).
-
-**Resolution (Phase 27 — RAG converted to LLM-callable tool):** The `session_rag_chunks` accumulation mechanism was removed entirely. RAG is no longer auto-fired; the LLM calls `query_knowledge_base` explicitly as a tool. Chunk results are returned as tool-result messages scoped to the local `messages` list for the current turn and are never written to `self.history`. Cross-turn accumulation is therefore structurally impossible. Within-turn persistence of tool results is a necessary consequence of the OpenAI tool-use protocol and is a conscious design decision. The chunk-count feedback recommendation is retained as a minor UX item.
 
 ---
 
@@ -90,7 +88,7 @@ When `--resume` is used, `startup_docs` content is taken verbatim from the JSONL
 | # | Severity | Location | Issue |
 |---|---|---|---|
 | 1 | HIGH ✅ | `chat.py:169–177` | Hostname, username, OS version auto-injected into every API call |
-| 2 | HIGH ✅ | `chat.py:142–148` | RAG chunks accumulate without bound across a session |
+| 2 | HIGH | `chat.py:142–148` | RAG chunks accumulate without bound across a session |
 | 3 | MEDIUM | `store.py:54` | User queries sent to embeddings API without disclosure |
 | 4 | HIGH | `store.py:65` | Pickle deserialization of cache enables RCE |
 | 5 | LOW | `resume.py:53–57` | Resume injects stale startup-doc content from log |
