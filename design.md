@@ -526,12 +526,16 @@ def execute_edit_file(arguments: dict, config: Config, turn_read_files: set[Path
 
 def execute_read_file(arguments: dict, config: Config, turn_read_files: set[Path]) -> str:
     """
-    Validate path against config.read_allowed_dirs, read and return the file content.
-    No user prompt — reads are silent.
-    On success, adds the resolved path to turn_read_files (enabling subsequent edit_file
-    or write_file calls on the same path within this turn).
-    Returns the UTF-8 content on success, or an error string if path is outside
-    allowed dirs, file not found, or I/O error. Does not add to turn_read_files on error.
+    Validate each path in arguments["paths"] against config.read_allowed_dirs, read and
+    return the file contents. No user prompt — reads are silent.
+    arguments: {"paths": list[str]}
+    Returns all results concatenated, each preceded by a header line:
+        === /abs/path/to/file.py ===
+        <content or error>
+    On success for each path, adds the resolved path to turn_read_files (enabling
+    subsequent edit_file or write_file calls on the same path within this turn).
+    Failed paths (outside allowed dirs, file not found, I/O error) include an error
+    message in place of content and are not added to turn_read_files.
     """
 
 def execute_list_dir(arguments: dict, config: Config) -> str:

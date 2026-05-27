@@ -134,10 +134,36 @@ def test_get_tools_omits_save_to_scratchpad_when_no_tools_registered():
 # execute_read_file
 # ---------------------------------------------------------------------------
 
+def test_read_file_single_path_returns_header_and_content(tmp_path):
+    allowed = tmp_path / "src"
+    allowed.mkdir()
+    f = allowed / "foo.py"
+    f.write_text("x = 1\n")
+    cfg = _config(read_allowed_dirs=[allowed])
+    result = execute_read_file({"paths": [str(f)]}, cfg, set())
+    assert f"=== {f.resolve()} ===" in result
+    assert "x = 1" in result
+
+
+def test_read_file_two_paths_returns_both_headers_and_contents(tmp_path):
+    allowed = tmp_path / "src"
+    allowed.mkdir()
+    a = allowed / "a.py"
+    a.write_text("a = 1\n")
+    b = allowed / "b.py"
+    b.write_text("b = 2\n")
+    cfg = _config(read_allowed_dirs=[allowed])
+    result = execute_read_file({"paths": [str(a), str(b)]}, cfg, set())
+    assert f"=== {a.resolve()} ===" in result
+    assert "a = 1" in result
+    assert f"=== {b.resolve()} ===" in result
+    assert "b = 2" in result
+
+
 def test_read_file_returns_error_when_outside_allowed_dirs(tmp_path):
     allowed = tmp_path / "allowed"
     cfg = _config(read_allowed_dirs=[allowed])
-    result = execute_read_file({"path": str(tmp_path / "secret.py")}, cfg, set())
+    result = execute_read_file({"paths": [str(tmp_path / "secret.py")]}, cfg, set())
     assert "outside allowed" in result.lower()
 
 
@@ -147,14 +173,15 @@ def test_read_file_returns_content_on_success(tmp_path):
     f = allowed / "foo.py"
     f.write_text("x = 1\n")
     cfg = _config(read_allowed_dirs=[allowed])
-    assert execute_read_file({"path": str(f)}, cfg, set()) == "x = 1\n"
+    result = execute_read_file({"paths": [str(f)]}, cfg, set())
+    assert "x = 1" in result
 
 
 def test_read_file_returns_error_when_file_not_found(tmp_path):
     allowed = tmp_path / "src"
     allowed.mkdir()
     cfg = _config(read_allowed_dirs=[allowed])
-    result = execute_read_file({"path": str(allowed / "missing.py")}, cfg, set())
+    result = execute_read_file({"paths": [str(allowed / "missing.py")]}, cfg, set())
     assert "not found" in result.lower() or "error" in result.lower()
 
 
@@ -165,7 +192,7 @@ def test_read_file_adds_path_to_turn_read_files_on_success(tmp_path):
     f.write_text("x = 1\n")
     cfg = _config(read_allowed_dirs=[allowed])
     turn_read_files: set[Path] = set()
-    execute_read_file({"path": str(f)}, cfg, turn_read_files)
+    execute_read_file({"paths": [str(f)]}, cfg, turn_read_files)
     assert f.resolve() in turn_read_files
 
 
@@ -173,8 +200,22 @@ def test_read_file_does_not_add_path_on_error(tmp_path):
     allowed = tmp_path / "allowed"
     cfg = _config(read_allowed_dirs=[allowed])
     turn_read_files: set[Path] = set()
-    execute_read_file({"path": str(tmp_path / "secret.py")}, cfg, turn_read_files)
+    execute_read_file({"paths": [str(tmp_path / "secret.py")]}, cfg, turn_read_files)
     assert len(turn_read_files) == 0
+
+
+def test_read_file_partial_failure_returns_all_results(tmp_path):
+    allowed = tmp_path / "src"
+    allowed.mkdir()
+    good = allowed / "good.py"
+    good.write_text("ok\n")
+    cfg = _config(read_allowed_dirs=[allowed])
+    turn_read_files: set[Path] = set()
+    result = execute_read_file({"paths": [str(allowed / "missing.py"), str(good)]}, cfg, turn_read_files)
+    assert "error" in result.lower()
+    assert "ok" in result
+    assert good.resolve() in turn_read_files
+    assert len(turn_read_files) == 1
 
 
 # ---------------------------------------------------------------------------

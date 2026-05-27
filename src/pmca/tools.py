@@ -54,9 +54,13 @@ _READ_FILE_SCHEMA = {
         "parameters": {
             "type": "object",
             "properties": {
-                "path": {"type": "string", "description": "Absolute path of the file to read."},
+                "paths": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Absolute paths of the files to read.",
+                },
             },
-            "required": ["path"],
+            "required": ["paths"],
             "additionalProperties": False,
         },
     },
@@ -421,20 +425,23 @@ def execute_edit_file(arguments: dict, config: Config, turn_read_files: set[Path
 
 
 def execute_read_file(arguments: dict, config: Config, turn_read_files: set[Path]) -> str:
-    target = Path(arguments["path"]).resolve()
-
-    if not _is_allowed(target, config.read_allowed_dirs):
-        dirs_str = ", ".join(str(d) for d in config.read_allowed_dirs)
-        return f"Error: path {target} is outside allowed directories: {dirs_str}"
-
-    try:
-        content = target.read_text(encoding="utf-8")
-        turn_read_files.add(target)
-        return content
-    except FileNotFoundError:
-        return f"Error: file not found: {target}"
-    except OSError as e:
-        return f"Error reading {target}: {e}"
+    paths = arguments["paths"]
+    sections: list[str] = []
+    for raw in paths:
+        target = Path(raw).resolve()
+        if not _is_allowed(target, config.read_allowed_dirs):
+            dirs_str = ", ".join(str(d) for d in config.read_allowed_dirs)
+            content = f"Error: path {target} is outside allowed directories: {dirs_str}"
+        else:
+            try:
+                content = target.read_text(encoding="utf-8")
+                turn_read_files.add(target)
+            except FileNotFoundError:
+                content = f"Error: file not found: {target}"
+            except OSError as e:
+                content = f"Error reading {target}: {e}"
+        sections.append(f"=== {target} ===\n{content}")
+    return "\n".join(sections)
 
 
 def execute_list_dir(arguments: dict, config: Config) -> str:

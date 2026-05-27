@@ -17,7 +17,7 @@ A terminal chat tool that wraps the OpenAI API with project-aware context. Point
 
 - **Write operations are gated by directory allowlists** — `write_allowed_dirs` and `read_allowed_dirs` in your config define the only locations the model can touch; requests outside those directories are rejected outright
 - **Every write and edit requires explicit approval** — the tool prints the full path, byte count, reason, and diff before asking `[y/N]`; the model cannot write anything without a keypress from you
-- **The model must read before it can edit or overwrite** — `edit_file` and `write_file` (on existing files) are blocked at runtime if the model has not called `read_file` on that path earlier in the same turn; this prevents blind overwrites where the model fabricates edits without ever seeing the current contents
+- **The model must read before it can edit or overwrite** — `edit_file` and `write_file` (on existing files) are blocked at runtime if the model has not called `read_file` on that path earlier in the same turn; this prevents blind overwrites where the model fabricates edits without ever seeing the current contents. `read_file` accepts a list of paths so the model can fetch multiple files in one call.
 - **File attachments prompt for secrets review** — before injecting any `[[filepath]]` attachment, the tool asks whether you have reviewed the file for secrets (prompt can be disabled with `--unsafe` if you know you will be working with non-secret files)
 - **All file paths must be absolute** — all file paths for read and write operations, including attachments, must be absolute to avoid accidental passing of files
 
