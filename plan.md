@@ -749,6 +749,82 @@ Apply all source changes listed above.
 
 ---
 
+## Phase 28 — LLM-controlled RAG chunk retention (`manage_rag_retention`)
+
+**Why here:** Builds on stable `config.py`, `tools.py`, `chat.py`, and `repl.py`. Adds a new tool that lets the LLM pin specific RAG chunks across turns so load-bearing context doesn't silently disappear when query vectors drift. Correctness-motivated: re-retrieval is unreliable, not just inefficient.
+
+### Design decisions
+
+- **Cherry-pick individual chunks** — the LLM selects specific `(file, label)` pairs, not whole query results.
+- **Separate `manage_rag_retention` tool** — single-purpose; `query_knowledge_base` stays side-effect-free.
+- **Identifier: `(source_file, label)` pair** — already surfaced in tool results; no new IDs needed.
+- **Storage: `ChatSession._retained_chunks: list[Chunk]`** — injected as `[RETAINED_i]` system messages after `session_attachments`, before `history`.
+- **Hard cap: `config.max_retained_chunks` (default 20)** — returns an error if adding would exceed the cap; no silent eviction.
+- **Combined retain/release** — one tool call can atomically release old chunks and retain new ones; releases are applied first so a same-call swap stays within the cap.
+- **Print on change** — after any turn where `_retained_chunks` changed, print `[Retained RAG: N chunks from M files]`.
+- **`/clear` flushes `_retained_chunks`** alongside history and session_attachments.
+
+### Changes across modules
+
+**`config.py`**
+- Add `max_retained_chunks: int = 20`
+- Validate: must be a positive integer if provided
+
+**`tools.py`**
+- Add `_MANAGE_RAG_RETENTION_SCHEMA` — parameters: `retain: list[{file, label}]` (optional), `release: list[{file, label}]` (optional); both default to `[]`
+- `get_tools()`: include `manage_rag_retention` whenever `query_knowledge_base` is included (i.e. when store has chunks)
+- Add `execute_manage_rag_retention(arguments, config, store, retained_chunks) -> str`:
+  - Apply releases first (by `(source_file, label)` match; unknown keys silently ignored)
+  - Validate retains: look up each `(file, label)` in `store._chunks`; error if not found
+  - Check cap: if `len(retained_chunks) + len(new_retains) > config.max_retained_chunks`, return error with slot count; do not partially apply
+  - Add new chunks (skip already-retained)
+  - Return summary string, e.g. `"Released 1 chunk. Retained 2 new chunks. [Retained RAG: 3 chunks from 2 files]"`
+
+**`chat.py`**
+- Add `self._retained_chunks: list[Chunk] = []` to `__init__`
+- `_dispatch_tool`: add `manage_rag_retention` case → `execute_manage_rag_retention(args, config, self.store, self._retained_chunks)`
+- `_build_messages()`: after `session_attachments` block, inject each retained chunk as a system message tagged `[RETAINED_i]` (only when list is non-empty)
+- `process()`: after the tool loop, compare `_retained_chunks` length before/after; if changed, print `[Retained RAG: N chunks from M files]`
+- `rotate_logger()`: reset `self._retained_chunks = []`
+
+**`repl.py`**
+- `/clear` handler: also reset `session._retained_chunks = []` (handled via `rotate_logger`, but document explicitly)
+
+### Red
+
+**`config.py`**
+- `max_retained_chunks` defaults to 20 when absent from YAML
+- Raises `ConfigError` when value is non-positive
+
+**`tools.py`**
+- `get_tools` includes `manage_rag_retention` when store has chunks
+- `execute_manage_rag_retention` with only `release`: removes matching chunks; returns correct summary
+- `execute_manage_rag_retention` with only `retain`: adds new chunks; returns correct summary
+- `execute_manage_rag_retention` with both: releases first, then retains; a swap within the cap succeeds
+- Returns error when a requested `(file, label)` is not found in the store
+- Returns error (with slot info) when retaining would exceed `max_retained_chunks`
+- Skips already-retained chunks silently (idempotent retain)
+- Unknown release keys are silently ignored
+
+**`chat.py`**
+- `_retained_chunks` is `[]` on fresh session
+- `_build_messages()` injects `[RETAINED_1]`…`[RETAINED_N]` system messages between `session_attachments` and `history` when list is non-empty
+- `_build_messages()` injects nothing when `_retained_chunks` is empty
+- After a turn where `manage_rag_retention` adds or removes chunks, `[Retained RAG: N chunks from M files]` is printed
+- After a turn where `_retained_chunks` is unchanged, nothing extra is printed
+- `rotate_logger()` resets `_retained_chunks` to `[]`
+
+**`repl.py`**
+- After `/clear`, `_retained_chunks` is `[]`
+
+### Green
+Apply all source changes listed above.
+
+### Refactor
+- Extract `_format_retained_chunk(i, chunk) -> str` helper in `chat.py` for the `[RETAINED_i]` block format, symmetric to `_format_attachment`.
+
+---
+
 ## Phase 11 — Integration smoke test
 
 One end-to-end test with real files, mocked OpenAI API, and a real temp log directory:

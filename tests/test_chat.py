@@ -791,3 +791,132 @@ def test_process_dispatches_read_tool(tmp_path, tool_name, executor_path, execut
 
     assert response == "Done"
     mock_exec.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# _retained_chunks
+# ---------------------------------------------------------------------------
+
+def test_retained_chunks_empty_at_session_start():
+    session, _, _ = _make_session()
+    assert session._retained_chunks == []
+
+
+def test_build_messages_omits_retained_block_when_empty():
+    session, _, _ = _make_session()
+
+    with patch("pmca.chat.chat_completion", return_value="r") as mock_cc:
+        with patch("pmca.chat.parse_attachment_paths", return_value=[]):
+            session.process("hi")
+
+    messages = mock_cc.call_args[0][0]
+    assert not any("[RETAINED" in m.get("content", "") for m in messages)
+
+
+def test_build_messages_injects_retained_chunks_as_system_messages():
+    session, _, _ = _make_session()
+    session._retained_chunks = [
+        Chunk(content="class Foo: pass", source_file=Path("/src/a.py"), label="class Foo"),
+    ]
+
+    with patch("pmca.chat.chat_completion", return_value="r") as mock_cc:
+        with patch("pmca.chat.parse_attachment_paths", return_value=[]):
+            session.process("hi")
+
+    messages = mock_cc.call_args[0][0]
+    retained_msgs = [m for m in messages if "[RETAINED_" in m.get("content", "")]
+    assert len(retained_msgs) == 1
+    assert retained_msgs[0]["role"] == "system"
+    assert "class Foo: pass" in retained_msgs[0]["content"]
+    assert "/src/a.py" in retained_msgs[0]["content"]
+
+
+def test_build_messages_retained_chunks_appear_after_attachments_before_history():
+    session, _, _ = _make_session()
+    session._retained_chunks = [_chunk("fn `bar`")]
+    session.history = [
+        {"role": "user", "content": "old q"},
+        {"role": "assistant", "content": "old a"},
+    ]
+    att = _attachment("CONTEXT_1")
+
+    with patch("pmca.chat.chat_completion", return_value="r") as mock_cc:
+        with patch("pmca.chat.parse_attachment_paths", return_value=[att.path]):
+            with patch("pmca.chat.resolve_attachments", return_value=[att]):
+                with patch("pmca.chat.substitute_identifiers", return_value="new q"):
+                    session.process("new q")
+
+    messages = mock_cc.call_args[0][0]
+    indices = {m.get("content", "")[:20]: i for i, m in enumerate(messages)}
+    att_idx = next(i for i, m in enumerate(messages) if "[CONTEXT_1]" in m.get("content", ""))
+    retained_idx = next(i for i, m in enumerate(messages) if "[RETAINED_" in m.get("content", ""))
+    history_idx = next(i for i, m in enumerate(messages) if m.get("content") == "old q")
+    assert att_idx < retained_idx < history_idx
+
+
+def test_process_dispatches_manage_rag_retention():
+    from pmca.types import ToolCallRequest
+    session, store, _ = _make_session()
+    store._chunks = [_chunk()]
+
+    tool_req = ToolCallRequest(
+        tool_call_id="call_retain",
+        name="manage_rag_retention",
+        arguments={"retain": [{"file": "/a.py", "label": "fn `foo`"}]},
+    )
+
+    with patch("pmca.chat.chat_completion", side_effect=[tool_req, "Done"]):
+        with patch("pmca.chat.parse_attachment_paths", return_value=[]):
+            with patch("pmca.chat.execute_manage_rag_retention", return_value="Retained 1 new chunk(s). [Retained RAG: 1 chunk(s) from 1 file(s)]") as mock_exec:
+                response, _ = session.process("pin it")
+
+    assert response == "Done"
+    mock_exec.assert_called_once()
+    args = mock_exec.call_args[0]
+    assert args[0] == tool_req.arguments
+    assert args[3] is session._retained_chunks
+
+
+def test_process_prints_retained_rag_summary_when_set_changes(capsys):
+    from pmca.types import ToolCallRequest
+    session, store, _ = _make_session()
+    store._chunks = [_chunk()]
+
+    tool_req = ToolCallRequest(
+        tool_call_id="call_retain",
+        name="manage_rag_retention",
+        arguments={"retain": [{"file": "/a.py", "label": "fn `foo`"}]},
+    )
+
+    def fake_manage(args, config, store, retained):
+        retained.append(_chunk())
+        return "Retained 1 new chunk(s). [Retained RAG: 1 chunk(s) from 1 file(s)]"
+
+    with patch("pmca.chat.chat_completion", side_effect=[tool_req, "Done"]):
+        with patch("pmca.chat.parse_attachment_paths", return_value=[]):
+            with patch("pmca.chat.execute_manage_rag_retention", side_effect=fake_manage):
+                session.process("pin it")
+
+    out = capsys.readouterr().out
+    assert "[Retained RAG:" in out
+
+
+def test_process_does_not_print_retained_summary_when_unchanged(capsys):
+    session, _, _ = _make_session()
+
+    with patch("pmca.chat.chat_completion", return_value="r"):
+        with patch("pmca.chat.parse_attachment_paths", return_value=[]):
+            session.process("hi")
+
+    out = capsys.readouterr().out
+    assert "[Retained RAG:" not in out
+
+
+def test_rotate_logger_resets_retained_chunks():
+    session, _, _ = _make_session()
+    session._retained_chunks = [_chunk("fn `foo`")]
+    with patch("pmca.chat.SessionLogger"):
+        with patch("pmca.chat.datetime") as mock_dt:
+            mock_dt.now.return_value.strftime.return_value = "2026-01-01_00-00-02"
+            session.rotate_logger()
+    assert session._retained_chunks == []

@@ -46,6 +46,7 @@ class Config:
     rag_shallow_k: int = 3       # chunks returned for depth="shallow"
     rag_medium_k: int = 7        # chunks returned for depth="medium"
     rag_deep_k: int = 15         # chunks returned for depth="deep"
+    max_retained_chunks: int = 20  # hard cap on LLM-retained RAG chunks; configurable
     test_dir: Path | None = None          # absolute path; None → run_tests tool not registered
     test_timeout: int = 60                # seconds before run_tests is killed
     max_attachment_kb: int = 500
@@ -297,6 +298,7 @@ class ChatSession:
     _next_attachment_n: int      # session-global counter for CONTEXT_<n> identifiers
     _system_context: str | None  # computed once at __init__ from config.system_context_fields; None if list is empty
     _turn_seen_chunks: set[tuple[Path, str]]  # (source_file, label) pairs already returned this turn; reset at start of each process()
+    _retained_chunks: list[Chunk]  # chunks the LLM has explicitly pinned for this session; injected as [RETAINED_i] system messages each turn
 
     def process(self, user_input: str) -> str:
         """
@@ -372,7 +374,7 @@ Permanent errors: `AuthenticationError`, `BadRequestError`, other `APIStatusErro
 
 ### 4.8 `tools.py`
 
-**Responsibilities:** Define tool schemas and implement execution for `query_knowledge_base`, `write_file`, `edit_file`, `read_file`, `list_dir`, `search`, `get_definition`, and `run_tests`. All read tools are gated by `read_allowed_dirs`; writes are gated by `write_allowed_dirs`; test execution is gated by `test_dir`; RAG is gated by store content. Reads and test runs execute without user approval; writes require per-call approval.
+**Responsibilities:** Define tool schemas and implement execution for `query_knowledge_base`, `manage_rag_retention`, `write_file`, `edit_file`, `read_file`, `list_dir`, `search`, `get_definition`, and `run_tests`. All read tools are gated by `read_allowed_dirs`; writes are gated by `write_allowed_dirs`; test execution is gated by `test_dir`; RAG tools are gated by store content. Reads and test runs execute without user approval; writes require per-call approval.
 
 ```python
 def get_tools(config: Config, store: VectorStore) -> list[dict] | None:
@@ -384,6 +386,31 @@ def get_tools(config: Config, store: VectorStore) -> list[dict] | None:
     read_file, list_dir, search, and get_definition are included when read_allowed_dirs is non-empty.
     run_tests is included when test_dir is not None.
     Tool descriptions include the relevant allowed directories / depth levels.
+    """
+
+def execute_manage_rag_retention(
+    arguments: dict,
+    config: Config,
+    store: VectorStore,
+    retained_chunks: list[Chunk],
+) -> str:
+    """
+    Retain and/or release RAG chunks across turns.
+    arguments: {
+        "retain":  [{"file": str, "label": str}, ...],   # optional
+        "release": [{"file": str, "label": str}, ...]    # optional
+    }
+    Processing order: releases first, then retains (so a swap in one call stays within the cap).
+    Release: remove chunks matching (source_file, label) from retained_chunks; unknown keys are silently ignored.
+    Retain: for each entry, look up the matching Chunk in the store by (source_file, label); skip if already retained.
+             If adding all requested retains would exceed config.max_retained_chunks, return an error string
+             listing the cap and how many slots are free — do not partially apply.
+    Mutates retained_chunks in-place.
+    Returns a summary string, e.g.:
+      "Released 1 chunk. Retained 2 new chunks. [Retained RAG: 3 chunks from 2 files]"
+    Returns an error string if a requested retain key is not found in the store.
+    Returns an error string if the cap would be exceeded (after releases): e.g.
+      "Error: cap is 20; 18 slots used, 1 free — cannot retain 3 chunks. Release some first."
     """
 
 def execute_rag_query(
@@ -712,13 +739,21 @@ Order sent to OpenAI on each turn:
           ---
           [CONTEXT_2] ...
 
+[system]  [RETAINED_1]              ← ALL _retained_chunks pinned by the LLM (if any)
+          File: /absolute/path/to/config.py
+          Chunk: class Config
+          ---
+          <chunk content>
+          ---
+          [RETAINED_2] ...
+
 [user]    <prior user message>
 [assistant] <prior response>
 [user]    ...  ← trimmed history (oldest dropped first)
 [user]    <current message>
 ```
 
-All session_attachments are injected on every turn. RAG chunks are no longer injected as system messages — the model retrieves them on demand via the `query_knowledge_base` tool, and results appear inline as tool result messages. Only user/assistant exchanges are stored in history. There is no special `[RESUMED_CONTEXT]` block — resumed sessions use the same assembly path as live sessions.
+All `session_attachments` are injected on every turn. `_retained_chunks` are injected as `[RETAINED_i]` system messages after attachments, before history — only when the list is non-empty. The tag distinguishes pinned context ("the LLM chose to keep this") from transient tool results. RAG chunks are otherwise retrieved on demand via the `query_knowledge_base` tool, and results appear inline as tool result messages. Only user/assistant exchanges are stored in history. There is no special `[RESUMED_CONTEXT]` block — resumed sessions use the same assembly path as live sessions.
 
 ---
 
@@ -790,7 +825,7 @@ History trimming is lazy: the first `session.process()` call runs `_trim_history
 | `/set history_token_budget=N` | Set history token budget for this session |
 | `/set test_timeout=N` | Set test run timeout (seconds) for this session |
 | `/extract <path>` | Extract code blocks from the last response into `<path>`; fence language inferred from extension (`.py`, `.yaml`/`.yml`, `.json`, `.toml`, `.sh`) |
-| `/clear` | Clear conversation history and session_attachments; rotate to a new log file (writes fresh system_prompt + startup_doc entries); print new log path |
+| `/clear` | Clear conversation history, session_attachments, and _retained_chunks; rotate to a new log file (writes fresh system_prompt + startup_doc entries); print new log path |
 | `/help` | Print command reference and key bindings |
 | `/exit` | End session (also: Ctrl+C) |
 
