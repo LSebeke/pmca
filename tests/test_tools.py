@@ -20,7 +20,7 @@ from pmca.tools import (
     execute_write_file,
     get_tools,
 )
-from pmca.types import Chunk
+from pmca.types import Chunk, ScratchpadEntry
 
 
 # ---------------------------------------------------------------------------
@@ -63,7 +63,8 @@ def test_get_tools_returns_read_tools_when_read_dirs_configured(tmp_path):
     tools = get_tools(cfg, _empty_store())
     assert tools is not None
     names = {t["function"]["name"] for t in tools}
-    assert names == {"read_file", "list_dir", "search", "get_definition"}
+    assert {"read_file", "list_dir", "search", "get_definition"}.issubset(names)
+    assert "save_to_scratchpad" in names
 
 
 def test_get_tools_returns_all_tools_when_both_configured(tmp_path):
@@ -71,7 +72,8 @@ def test_get_tools_returns_all_tools_when_both_configured(tmp_path):
     tools = get_tools(cfg, _empty_store())
     assert tools is not None
     names = {t["function"]["name"] for t in tools}
-    assert names == {"write_file", "edit_file", "read_file", "list_dir", "search", "get_definition"}
+    assert {"write_file", "edit_file", "read_file", "list_dir", "search", "get_definition"}.issubset(names)
+    assert "save_to_scratchpad" in names
 
 
 def test_get_tools_read_description_lists_allowed_dirs(tmp_path):
@@ -86,7 +88,8 @@ def test_get_tools_returns_write_tools_when_write_dirs_configured(tmp_path):
     tools = get_tools(cfg, _empty_store())
     assert tools is not None
     names = {t["function"]["name"] for t in tools}
-    assert names == {"write_file", "edit_file"}
+    assert {"write_file", "edit_file"}.issubset(names)
+    assert "save_to_scratchpad" in names
 
 
 def test_get_tools_includes_edit_file_when_write_dirs_configured(tmp_path):
@@ -113,6 +116,18 @@ def test_get_tools_schema_has_required_parameters(tmp_path):
     assert "path" in required
     assert "content" in required
     assert "description" in required
+
+
+def test_get_tools_includes_save_to_scratchpad_whenever_tools_registered(tmp_path):
+    cfg = _config(read_allowed_dirs=[tmp_path])
+    tools = get_tools(cfg, _empty_store())
+    names = {t["function"]["name"] for t in tools}
+    assert "save_to_scratchpad" in names
+
+
+def test_get_tools_omits_save_to_scratchpad_when_no_tools_registered():
+    cfg = _config(write_allowed_dirs=[], read_allowed_dirs=[])
+    assert get_tools(cfg, _empty_store()) is None
 
 
 # ---------------------------------------------------------------------------
@@ -776,3 +791,103 @@ def test_run_tests_returns_false_on_oserror(tmp_path):
         ok, result = execute_run_tests({}, cfg)
     assert ok is False
     assert "error" in result.lower()
+
+
+# ---------------------------------------------------------------------------
+# ScratchpadEntry
+# ---------------------------------------------------------------------------
+
+def test_scratchpad_entry_has_title_and_content():
+    entry = ScratchpadEntry(title="read_file: src/foo.py — init", content="def __init__(): pass")
+    assert entry.title == "read_file: src/foo.py — init"
+    assert entry.content == "def __init__(): pass"
+
+
+# ---------------------------------------------------------------------------
+# execute_save_to_scratchpad
+# ---------------------------------------------------------------------------
+
+def test_scratchpad_import():
+    from pmca.tools import execute_save_to_scratchpad  # noqa: F401
+
+
+def test_scratchpad_delete_removes_entry_by_title():
+    from pmca.tools import execute_save_to_scratchpad
+    cfg = _config(max_scratchpad_entries=20)
+    scratchpad = [ScratchpadEntry(title="foo", content="bar")]
+    execute_save_to_scratchpad({"delete": ["foo"]}, cfg, scratchpad)
+    assert scratchpad == []
+
+
+def test_scratchpad_delete_unknown_title_is_silently_ignored():
+    from pmca.tools import execute_save_to_scratchpad
+    cfg = _config(max_scratchpad_entries=20)
+    scratchpad = [ScratchpadEntry(title="foo", content="bar")]
+    execute_save_to_scratchpad({"delete": ["nonexistent"]}, cfg, scratchpad)
+    assert len(scratchpad) == 1
+
+
+def test_scratchpad_add_new_entry():
+    from pmca.tools import execute_save_to_scratchpad
+    cfg = _config(max_scratchpad_entries=20)
+    scratchpad = []
+    execute_save_to_scratchpad({"entries": [{"title": "t1", "content": "c1"}]}, cfg, scratchpad)
+    assert len(scratchpad) == 1
+    assert scratchpad[0].title == "t1"
+    assert scratchpad[0].content == "c1"
+
+
+def test_scratchpad_overwrite_existing_title():
+    from pmca.tools import execute_save_to_scratchpad
+    cfg = _config(max_scratchpad_entries=20)
+    scratchpad = [ScratchpadEntry(title="t1", content="old")]
+    execute_save_to_scratchpad({"entries": [{"title": "t1", "content": "new"}]}, cfg, scratchpad)
+    assert len(scratchpad) == 1
+    assert scratchpad[0].content == "new"
+
+
+def test_scratchpad_overwrite_does_not_count_against_cap():
+    from pmca.tools import execute_save_to_scratchpad
+    cfg = _config(max_scratchpad_entries=1)
+    scratchpad = [ScratchpadEntry(title="t1", content="old")]
+    result = execute_save_to_scratchpad({"entries": [{"title": "t1", "content": "new"}]}, cfg, scratchpad)
+    assert "Error" not in result
+    assert scratchpad[0].content == "new"
+
+
+def test_scratchpad_delete_then_add_in_one_call():
+    from pmca.tools import execute_save_to_scratchpad
+    cfg = _config(max_scratchpad_entries=1)
+    scratchpad = [ScratchpadEntry(title="old", content="x")]
+    result = execute_save_to_scratchpad(
+        {"delete": ["old"], "entries": [{"title": "new", "content": "y"}]},
+        cfg, scratchpad,
+    )
+    assert "Error" not in result
+    assert len(scratchpad) == 1
+    assert scratchpad[0].title == "new"
+
+
+def test_scratchpad_cap_exceeded_returns_error_and_does_not_apply():
+    from pmca.tools import execute_save_to_scratchpad
+    cfg = _config(max_scratchpad_entries=1)
+    scratchpad = [ScratchpadEntry(title="existing", content="x")]
+    result = execute_save_to_scratchpad(
+        {"entries": [{"title": "new1", "content": "a"}, {"title": "new2", "content": "b"}]},
+        cfg, scratchpad,
+    )
+    assert "Error" in result
+    assert len(scratchpad) == 1  # not partially applied
+
+
+def test_scratchpad_summary_string_format():
+    from pmca.tools import execute_save_to_scratchpad
+    cfg = _config(max_scratchpad_entries=20)
+    scratchpad = [ScratchpadEntry(title="old", content="x")]
+    result = execute_save_to_scratchpad(
+        {"delete": ["old"], "entries": [{"title": "n1", "content": "a"}, {"title": "n2", "content": "b"}]},
+        cfg, scratchpad,
+    )
+    assert "Deleted 1" in result
+    assert "Saved 2" in result
+    assert "[Scratchpad: 2 entries]" in result

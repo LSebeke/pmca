@@ -7,7 +7,7 @@ from pathlib import Path
 
 from pmca.config import Config
 from pmca.rag.store import VectorStore
-from pmca.types import Chunk
+from pmca.types import Chunk, ScratchpadEntry
 
 _WRITE_FILE_SCHEMA = {
     "type": "function",
@@ -153,6 +153,48 @@ _RAG_SCHEMA = {
 }
 
 
+_SAVE_TO_SCRATCHPAD_SCHEMA = {
+    "type": "function",
+    "function": {
+        "name": "save_to_scratchpad",
+        "description": (
+            "Save excerpts from tool call returns to the scratchpad so they persist across turns. "
+            "Only save information that would otherwise be lost (tool call returns are not stored in history). "
+            "Each entry must have a title that makes its origin clear "
+            "(e.g. 'read_file: src/pmca/config.py — load_config body'). "
+            "Use 'entries' to upsert (add or overwrite by title) and 'delete' to remove entries by title."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "entries": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "title": {"type": "string", "description": "Short label making the origin clear."},
+                            "content": {"type": "string", "description": "Excerpt to save."},
+                        },
+                        "required": ["title", "content"],
+                        "additionalProperties": False,
+                    },
+                    "description": "Entries to upsert (add new or overwrite existing by title).",
+                    "default": [],
+                },
+                "delete": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Titles of entries to delete. Unknown titles are silently ignored.",
+                    "default": [],
+                },
+            },
+            "required": [],
+            "additionalProperties": False,
+        },
+    },
+}
+
+
 def get_tools(config: Config, store: VectorStore) -> list[dict] | None:
     tools = []
 
@@ -206,6 +248,9 @@ def get_tools(config: Config, store: VectorStore) -> list[dict] | None:
             },
         })
 
+    if tools:
+        tools.append(_SAVE_TO_SCRATCHPAD_SCHEMA)
+
     return tools if tools else None
 
 
@@ -238,6 +283,60 @@ def _format_rag_chunks(chunks: list[Chunk]) -> str:
             f"[RAG_{i}]\nFile: {chunk.source_file}\nChunk: {chunk.label}\n---\n{chunk.content}\n---"
         )
     return "\n\n".join(parts)
+
+
+def execute_save_to_scratchpad(
+    arguments: dict,
+    config: Config,
+    scratchpad: list[ScratchpadEntry],
+) -> str:
+    delete_titles = set(arguments.get("delete", []))
+    upsert_entries = arguments.get("entries", [])
+
+    # 1. Deletes first
+    deleted_count = 0
+    if delete_titles:
+        before = len(scratchpad)
+        scratchpad[:] = [e for e in scratchpad if e.title not in delete_titles]
+        deleted_count = before - len(scratchpad)
+
+    # 2. Split upserts into overwrites vs new additions
+    existing_titles = {e.title for e in scratchpad}
+    overwrites = [e for e in upsert_entries if e["title"] in existing_titles]
+    new_additions = [e for e in upsert_entries if e["title"] not in existing_titles]
+
+    # 3. Cap check on new additions only
+    if len(scratchpad) + len(new_additions) > config.max_scratchpad_entries:
+        free = config.max_scratchpad_entries - len(scratchpad)
+        return (
+            f"Error: cap is {config.max_scratchpad_entries}; "
+            f"{len(scratchpad)} slot(s) used, {free} free — "
+            f"cannot add {len(new_additions)} new entry/entries. Delete some first."
+        )
+
+    # 4. Apply overwrites in-place
+    overwrite_map = {e["title"]: e["content"] for e in overwrites}
+    for entry in scratchpad:
+        if entry.title in overwrite_map:
+            entry.content = overwrite_map[entry.title]
+
+    # 5. Append new additions
+    for e in new_additions:
+        scratchpad.append(ScratchpadEntry(title=e["title"], content=e["content"]))
+
+    # 6. Summary
+    def _n(count: int, noun: str) -> str:
+        return f"{count} {noun}" + ("" if count == 1 else "s")
+
+    parts = []
+    if deleted_count:
+        parts.append(f"Deleted {_n(deleted_count, 'entry')}.")
+    if overwrites:
+        parts.append(f"Updated {_n(len(overwrites), 'entry')}.")
+    if new_additions:
+        parts.append(f"Saved {_n(len(new_additions), 'new entry')}.")
+    parts.append(f"[Scratchpad: {len(scratchpad)} entries]")
+    return " ".join(parts)
 
 
 def execute_write_file(arguments: dict, config: Config) -> tuple[bool, str]:

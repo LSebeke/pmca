@@ -20,6 +20,12 @@ class Attachment:
 
 
 @dataclass
+class ScratchpadEntry:
+    title: str    # short label making the origin of the information clear
+    content: str  # arbitrary excerpt from a tool call return
+
+
+@dataclass
 class ToolCallRequest:
     tool_call_id: str
     name: str

@@ -32,6 +32,7 @@ class Config:
     rag_shallow_k: int = 3
     rag_medium_k: int = 7
     rag_deep_k: int = 15
+    max_scratchpad_entries: int = 20
     temperature: float | None = None
     max_tokens: int | None = None
     top_p: float | None = None
@@ -73,6 +74,7 @@ def load_config(config_name: str) -> Config:
         rag_shallow_k=data.get("rag_shallow_k", 3),
         rag_medium_k=data.get("rag_medium_k", 7),
         rag_deep_k=data.get("rag_deep_k", 15),
+        max_scratchpad_entries=data.get("max_scratchpad_entries", 20),
         temperature=data.get("temperature"),
         max_tokens=data.get("max_tokens"),
         top_p=data.get("top_p"),
@@ -133,7 +135,7 @@ def _validate_test_dir(value: str | None) -> None:
 
 
 def _validate_rag_depth_k(data: dict) -> None:
-    for field_name in ("rag_shallow_k", "rag_medium_k", "rag_deep_k"):
+    for field_name in ("rag_shallow_k", "rag_medium_k", "rag_deep_k", "max_scratchpad_entries"):
         value = data.get(field_name)
         if value is not None and value <= 0:
             raise ConfigError(f"{field_name} must be a positive integer, got: {value}")

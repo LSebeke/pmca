@@ -791,3 +791,90 @@ def test_process_dispatches_read_tool(tmp_path, tool_name, executor_path, execut
 
     assert response == "Done"
     mock_exec.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# _scratchpad — initial state, injection, dispatch, change notice, clear
+# ---------------------------------------------------------------------------
+
+def test_scratchpad_starts_empty():
+    session, _, _ = _make_session()
+    assert session._scratchpad == []
+
+
+def test_build_messages_injects_scratchpad_entries_as_system_messages():
+    from pmca.types import ScratchpadEntry
+    session, _, _ = _make_session()
+    session._scratchpad = [
+        ScratchpadEntry(title="read_file: src/foo.py — init", content="def __init__(): pass"),
+        ScratchpadEntry(title="search: config pattern", content="max_tokens = 20"),
+    ]
+    msgs = session._build_messages("hi", [])
+    scratchpad_msgs = [m for m in msgs if m["role"] == "system" and "[SCRATCHPAD_" in m["content"]]
+    assert len(scratchpad_msgs) == 2
+    assert "read_file: src/foo.py — init" in scratchpad_msgs[0]["content"]
+    assert "def __init__(): pass" in scratchpad_msgs[0]["content"]
+    assert "[SCRATCHPAD_1]" in scratchpad_msgs[0]["content"]
+    assert "[SCRATCHPAD_2]" in scratchpad_msgs[1]["content"]
+
+
+def test_build_messages_omits_scratchpad_when_empty():
+    session, _, _ = _make_session()
+    msgs = session._build_messages("hi", [])
+    assert not any("[SCRATCHPAD_" in m.get("content", "") for m in msgs)
+
+
+def test_process_dispatches_save_to_scratchpad():
+    from pmca.types import ScratchpadEntry, ToolCallRequest
+    session, _, _ = _make_session(_config(read_allowed_dirs=[]))
+
+    tool_req = ToolCallRequest(
+        tool_call_id="call_s1",
+        name="save_to_scratchpad",
+        arguments={"entries": [{"title": "t1", "content": "c1"}], "delete": []},
+    )
+    with patch("pmca.chat.chat_completion", side_effect=[tool_req, "Saved."]):
+        with patch("pmca.chat.parse_attachment_paths", return_value=[]):
+            response, _ = session.process("remember this")
+
+    assert response == "Saved."
+    assert len(session._scratchpad) == 1
+    assert session._scratchpad[0].title == "t1"
+
+
+def test_process_prints_scratchpad_notice_when_changed(capsys):
+    from pmca.types import ScratchpadEntry, ToolCallRequest
+    session, _, _ = _make_session()
+
+    tool_req = ToolCallRequest(
+        tool_call_id="call_s2",
+        name="save_to_scratchpad",
+        arguments={"entries": [{"title": "t1", "content": "c1"}], "delete": []},
+    )
+    with patch("pmca.chat.chat_completion", side_effect=[tool_req, "Done."]):
+        with patch("pmca.chat.parse_attachment_paths", return_value=[]):
+            session.process("go")
+
+    out = capsys.readouterr().out
+    assert "[Scratchpad:" in out
+    assert "1" in out
+
+
+def test_process_does_not_print_scratchpad_notice_when_unchanged(capsys):
+    session, _, _ = _make_session()
+    with patch("pmca.chat.chat_completion", return_value="Hello"):
+        with patch("pmca.chat.parse_attachment_paths", return_value=[]):
+            session.process("hi")
+    out = capsys.readouterr().out
+    assert "[Scratchpad:" not in out
+
+
+def test_rotate_logger_resets_scratchpad():
+    from pmca.types import ScratchpadEntry
+    session, _, _ = _make_session()
+    session._scratchpad = [ScratchpadEntry(title="t", content="c")]
+    with patch("pmca.chat.SessionLogger"):
+        with patch("pmca.chat.datetime") as mock_dt:
+            mock_dt.now.return_value.strftime.return_value = "2026-05-27_10-00-00"
+            session.rotate_logger()
+    assert session._scratchpad == []
