@@ -749,6 +749,98 @@ Apply all source changes listed above.
 
 ---
 
+## Phase 28 — LLM scratchpad (`save_to_scratchpad`)
+
+**Why here:** Builds on stable `config.py`, `tools.py`, `chat.py`, and `repl.py`. Tool call returns (from `read_file`, `search`, `get_definition`, `query_knowledge_base`, `run_tests`, etc.) are appended to the local `messages` list during the tool loop but are **never stored in `self.history`**. They vanish at the end of every turn. `save_to_scratchpad` gives the LLM an explicit mechanism to preserve information it finds before it disappears.
+
+### Design decisions
+
+- **Universal retention** — works for any tool return, not just RAG chunks. One mechanism replaces the previous `manage_rag_retention`.
+- **Upsert + delete list** — one call can atomically delete old entries and upsert new ones; deletes run first so a title replacement stays within the cap.
+- **Required title** — must make the origin of the information clear (e.g. `"read_file: src/pmca/config.py — load_config body"`); enforced by description, not code.
+- **Content constraint** — LLM must only save information that would otherwise be lost (tool call returns). Enforced by description.
+- **Storage: `ChatSession._scratchpad: list[ScratchpadEntry]`** — injected as `[SCRATCHPAD_i]` system messages after `session_attachments`, before `history`.
+- **Hard cap: `config.max_scratchpad_entries` (default 20)** — error if adding new titles would exceed cap; overwrites of existing titles are free.
+- **Print on change** — after any turn where `_scratchpad` changed, print `[Scratchpad: N entries]`.
+- **`/clear` flushes `_scratchpad`** alongside history and session_attachments.
+- **Replaces `manage_rag_retention`** — Phase 28 (old) is reverted; this phase is implemented from that clean state.
+
+### New data type (`types.py`)
+
+```python
+@dataclass
+class ScratchpadEntry:
+    title: str    # short, origin-describing label
+    content: str  # arbitrary excerpt from a tool call return
+```
+
+### Changes across modules
+
+**`config.py`**
+- Add `max_scratchpad_entries: int = 20`
+- Validate: must be a positive integer if provided
+
+**`types.py`**
+- Add `ScratchpadEntry` dataclass: `title: str`, `content: str`
+
+**`tools.py`**
+- Add `_SAVE_TO_SCRATCHPAD_SCHEMA` — parameters: `entries: list[{title, content}]` (optional, default `[]`), `delete: list[str]` (optional, default `[]`)
+- `get_tools()`: include `save_to_scratchpad` whenever any other tool is registered (scratchpad is always useful if the LLM can call tools)
+- Add `execute_save_to_scratchpad(arguments, config, scratchpad) -> str`:
+  - Apply deletes first (by title match; unknown titles silently ignored)
+  - Separate upserts into overwrites (title already in scratchpad) and new additions
+  - Cap check on new additions only: if `len(scratchpad) + len(new_additions) > config.max_scratchpad_entries`, return error with slot count; do not partially apply
+  - Apply overwrites (update content in-place) then append new additions
+  - Return summary string, e.g. `"Deleted 1 entry. Updated 1 entry. Saved 2 new entries. [Scratchpad: 4 entries]"`
+
+**`chat.py`**
+- Add `self._scratchpad: list[ScratchpadEntry] = []` to `__init__`
+- `_dispatch_tool`: add `save_to_scratchpad` case → `execute_save_to_scratchpad(args, config, self._scratchpad)`
+- `_build_messages()`: after `session_attachments` block, inject each scratchpad entry as a system message tagged `[SCRATCHPAD_i]` (only when list is non-empty)
+- `process()`: after the tool loop, compare `_scratchpad` length before/after; if changed, print `[Scratchpad: N entries]`
+- `rotate_logger()`: reset `self._scratchpad = []`
+
+**`repl.py`**
+- `/clear` handler: `_scratchpad` reset is handled via `rotate_logger()` — document explicitly
+
+### Red
+
+**`config.py`**
+- `max_scratchpad_entries` defaults to 20 when absent from YAML
+- Raises `ConfigError` when value is non-positive
+
+**`types.py`**
+- `ScratchpadEntry` is a dataclass with `title: str` and `content: str`
+
+**`tools.py`**
+- `get_tools` includes `save_to_scratchpad` whenever any tool is registered
+- `execute_save_to_scratchpad` with only `delete`: removes matching entries by title; returns correct summary
+- `execute_save_to_scratchpad` with only `entries`: upserts entries; returns correct summary
+- `execute_save_to_scratchpad` with both: deletes first, then upserts; a title replacement within the cap succeeds in one call
+- Overwrites of existing titles do not count against the cap
+- Returns error (with slot info) when adding new titles would exceed `max_scratchpad_entries`
+- Unknown delete titles are silently ignored
+- Upsert is idempotent: calling with the same title twice in succession leaves one entry
+
+**`chat.py`**
+- `_scratchpad` is `[]` on fresh session
+- `_build_messages()` injects `[SCRATCHPAD_1]`…`[SCRATCHPAD_N]` system messages between `session_attachments` and `history` when list is non-empty
+- `_build_messages()` injects nothing when `_scratchpad` is empty
+- After a turn where `save_to_scratchpad` changes the scratchpad, `[Scratchpad: N entries]` is printed
+- After a turn where `_scratchpad` is unchanged, nothing extra is printed
+- `rotate_logger()` resets `_scratchpad` to `[]`
+
+**`repl.py`**
+- After `/clear`, `_scratchpad` is `[]`
+
+### Green
+Apply all source changes listed above.
+
+### Refactor
+- Extract `_format_scratchpad_entry(i, entry) -> str` helper in `chat.py` for the `[SCRATCHPAD_i]` block format, symmetric to `_format_attachment`.
+
+---
+
 ## Phase 11 — Integration smoke test
 
 One end-to-end test with real files, mocked OpenAI API, and a real temp log directory:

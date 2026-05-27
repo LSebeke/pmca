@@ -46,6 +46,7 @@ class Config:
     rag_shallow_k: int = 3       # chunks returned for depth="shallow"
     rag_medium_k: int = 7        # chunks returned for depth="medium"
     rag_deep_k: int = 15         # chunks returned for depth="deep"
+    max_scratchpad_entries: int = 20  # hard cap on scratchpad entries; configurable
     test_dir: Path | None = None          # absolute path; None → run_tests tool not registered
     test_timeout: int = 60                # seconds before run_tests is killed
     max_attachment_kb: int = 500
@@ -80,7 +81,20 @@ class Attachment:
     size_warning: bool  # True if file exceeded max_attachment_kb
 ```
 
-### 3.4 ToolCallRequest
+### 3.4 ScratchpadEntry
+
+```python
+@dataclass
+class ScratchpadEntry:
+    title: str    # short label that makes the origin of the information clear (e.g. "read_file: src/pmca/config.py — load_config body")
+    content: str  # arbitrary excerpt chosen by the LLM from a tool call return
+```
+
+Persists in `ChatSession._scratchpad` across turns and is injected as `[SCRATCHPAD_i]` system messages before history. The LLM must only save information that would otherwise be lost (tool call returns are not stored in history).
+
+---
+
+### 3.5 ToolCallRequest
 
 ```python
 @dataclass
@@ -94,7 +108,7 @@ Returned by `chat_completion()` when the model issues a tool call instead of a t
 
 ---
 
-### 3.5 LogEntry (JSONL)
+### 3.6 LogEntry (JSONL)
 
 Three entry types, distinguished by a mandatory `type` field:
 
@@ -297,6 +311,7 @@ class ChatSession:
     _next_attachment_n: int      # session-global counter for CONTEXT_<n> identifiers
     _system_context: str | None  # computed once at __init__ from config.system_context_fields; None if list is empty
     _turn_seen_chunks: set[tuple[Path, str]]  # (source_file, label) pairs already returned this turn; reset at start of each process()
+    _scratchpad: list[ScratchpadEntry]  # entries the LLM has saved from tool call returns; injected as [SCRATCHPAD_i] system messages each turn
 
     def process(self, user_input: str) -> str:
         """
@@ -372,18 +387,48 @@ Permanent errors: `AuthenticationError`, `BadRequestError`, other `APIStatusErro
 
 ### 4.8 `tools.py`
 
-**Responsibilities:** Define tool schemas and implement execution for `query_knowledge_base`, `write_file`, `edit_file`, `read_file`, `list_dir`, `search`, `get_definition`, and `run_tests`. All read tools are gated by `read_allowed_dirs`; writes are gated by `write_allowed_dirs`; test execution is gated by `test_dir`; RAG is gated by store content. Reads and test runs execute without user approval; writes require per-call approval.
+**Responsibilities:** Define tool schemas and implement execution for `query_knowledge_base`, `save_to_scratchpad`, `write_file`, `edit_file`, `read_file`, `list_dir`, `search`, `get_definition`, and `run_tests`. All read tools are gated by `read_allowed_dirs`; writes are gated by `write_allowed_dirs`; test execution is gated by `test_dir`; RAG tools are gated by store content. Reads and test runs execute without user approval; writes require per-call approval.
 
 ```python
 def get_tools(config: Config, store: VectorStore) -> list[dict] | None:
     """
     Returns the full tools list to pass to chat_completion, or None if no tools
     are enabled.
-    query_knowledge_base is included when store has indexed content (store._chunks is non-empty).
+    query_knowledge_base and save_to_scratchpad are included when store has indexed content
+    (store._chunks is non-empty) OR when read_allowed_dirs is non-empty (scratchpad is useful
+    whenever tool call returns exist).
+    save_to_scratchpad is always included when any other tool is registered.
     write_file and edit_file are included when write_allowed_dirs is non-empty.
     read_file, list_dir, search, and get_definition are included when read_allowed_dirs is non-empty.
     run_tests is included when test_dir is not None.
     Tool descriptions include the relevant allowed directories / depth levels.
+    """
+
+def execute_save_to_scratchpad(
+    arguments: dict,
+    config: Config,
+    scratchpad: list[ScratchpadEntry],
+) -> str:
+    """
+    Upsert and/or delete scratchpad entries across turns.
+    arguments: {
+        "entries": [{"title": str, "content": str}, ...],   # optional — upsert by title
+        "delete":  [str, ...]                                # optional — titles to delete
+    }
+    Processing order: deletes first, then upserts (so a same-call title replacement stays within the cap).
+    Delete: remove entries whose title matches; unknown titles are silently ignored.
+    Upsert: for each entry, overwrite if title already exists, otherwise add new.
+            If adding all new titles would exceed config.max_scratchpad_entries, return an error
+            string listing the cap and how many slots are free — do not partially apply.
+            Entries whose titles already exist do not count against the cap (they are overwrites).
+    Constraint enforced by description (not code): titles must make the origin clear
+    (e.g. "read_file: src/pmca/config.py — validation logic"), and content must be
+    information that would be lost otherwise (i.e. from tool call returns).
+    Mutates scratchpad in-place.
+    Returns a summary string, e.g.:
+      "Deleted 1 entry. Saved 2 entries. [Scratchpad: 3 entries]"
+    Returns an error string if the cap would be exceeded (after deletes): e.g.
+      "Error: cap is 20; 18 slots used, 1 free — cannot add 3 new entries. Delete some first."
     """
 
 def execute_rag_query(
@@ -641,7 +686,8 @@ def handle_command(cmd: str, session: ChatSession) -> None:
     """
     /set <param>=<value>  — update session.history_token_budget or session.config.test_timeout
     /extract <path>       — write code blocks from last response to <path> (fence language inferred from extension)
-    /clear                — reset session.history and session._next_attachment_n (to 1);
+    /clear                — reset session.history, session._next_attachment_n (to 1),
+                            and session._scratchpad;
                             call session.rotate_logger();
                             print "Conversation history cleared. New session: <path>"
     /help                 — print command reference
@@ -712,13 +758,20 @@ Order sent to OpenAI on each turn:
           ---
           [CONTEXT_2] ...
 
+[system]  [SCRATCHPAD_1]            ← ALL _scratchpad entries saved by the LLM (if any)
+          Title: read_file: src/pmca/config.py — load_config body
+          ---
+          <content excerpt>
+          ---
+          [SCRATCHPAD_2] ...
+
 [user]    <prior user message>
 [assistant] <prior response>
 [user]    ...  ← trimmed history (oldest dropped first)
 [user]    <current message>
 ```
 
-All session_attachments are injected on every turn. RAG chunks are no longer injected as system messages — the model retrieves them on demand via the `query_knowledge_base` tool, and results appear inline as tool result messages. Only user/assistant exchanges are stored in history. There is no special `[RESUMED_CONTEXT]` block — resumed sessions use the same assembly path as live sessions.
+All `session_attachments` are injected on every turn. `_scratchpad` entries are injected as `[SCRATCHPAD_i]` system messages after attachments, before history — only when the list is non-empty. The tag distinguishes saved context ("the LLM chose to keep this from a tool call return") from transient tool results. Because tool call returns are not stored in `history`, the scratchpad is the only mechanism for the LLM to preserve information it finds across turns. RAG chunks are retrieved on demand via the `query_knowledge_base` tool and appear inline as tool result messages; the LLM can save relevant excerpts to the scratchpad if they are load-bearing. Only user/assistant exchanges are stored in history. There is no special `[RESUMED_CONTEXT]` block — resumed sessions use the same assembly path as live sessions.
 
 ---
 
@@ -790,7 +843,7 @@ History trimming is lazy: the first `session.process()` call runs `_trim_history
 | `/set history_token_budget=N` | Set history token budget for this session |
 | `/set test_timeout=N` | Set test run timeout (seconds) for this session |
 | `/extract <path>` | Extract code blocks from the last response into `<path>`; fence language inferred from extension (`.py`, `.yaml`/`.yml`, `.json`, `.toml`, `.sh`) |
-| `/clear` | Clear conversation history and session_attachments; rotate to a new log file (writes fresh system_prompt + startup_doc entries); print new log path |
+| `/clear` | Clear conversation history, session_attachments, and _scratchpad; rotate to a new log file (writes fresh system_prompt + startup_doc entries); print new log path |
 | `/help` | Print command reference and key bindings |
 | `/exit` | End session (also: Ctrl+C) |
 
