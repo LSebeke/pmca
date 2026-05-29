@@ -11,9 +11,20 @@ from pmca.logger import SessionLogger
 from pmca.openai_client import chat_completion
 from pmca.rag.store import VectorStore
 from pmca.tools import (
+    execute_delete_file,
     execute_edit_file,
+    execute_find_files,
     execute_get_definition,
+    execute_git_blame,
+    execute_git_branches,
+    execute_git_current_branch,
+    execute_git_diff,
+    execute_git_log,
+    execute_git_show_file,
+    execute_git_status,
+    execute_insert_at_line,
     execute_list_dir,
+    execute_move_file,
     execute_rag_query,
     execute_read_file,
     execute_run_tests,
@@ -158,6 +169,28 @@ class ChatSession:
             return True, execute_get_definition(args, self.config)
         if name == "run_tests":
             return execute_run_tests(args, self.config)
+        if name == "find_files":
+            return True, execute_find_files(args, self.config)
+        if name == "insert_at_line":
+            return execute_insert_at_line(args, self.config, self._turn_read_files)
+        if name == "delete_file":
+            return execute_delete_file(args, self.config, self._turn_read_files)
+        if name == "move_file":
+            return execute_move_file(args, self.config, self._turn_read_files)
+        if name == "git_status":
+            return True, execute_git_status(self.config)
+        if name == "git_log":
+            return True, execute_git_log(args, self.config)
+        if name == "git_diff":
+            return True, execute_git_diff(args, self.config)
+        if name == "git_blame":
+            return True, execute_git_blame(args, self.config)
+        if name == "git_show_file":
+            return True, execute_git_show_file(args, self.config)
+        if name == "git_branches":
+            return True, execute_git_branches(self.config)
+        if name == "git_current_branch":
+            return True, execute_git_current_branch(self.config)
         return False, f"Error: unknown tool '{name}'"
 
     def _build_messages(

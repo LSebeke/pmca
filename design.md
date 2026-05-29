@@ -50,6 +50,7 @@ class Config:
     rag_deep_k: int = 15         # chunks returned for depth="deep"
     max_scratchpad_entries: int = 20  # hard cap on scratchpad entries; configurable
     skills_dir: Path | None = None        # absolute path to skill directory; None → /skill command disabled
+    git_root: Path | None = None          # absolute path to git repo root; None → git tools not registered
     test_dir: Path | None = None          # absolute path; None → run_tests tool not registered
     test_timeout: int = 60                # seconds before run_tests is killed
     max_attachment_kb: int = 500
@@ -416,7 +417,13 @@ Permanent errors: `AuthenticationError`, `BadRequestError`, other `APIStatusErro
 
 ### 4.8 `tools.py`
 
-**Responsibilities:** Define tool schemas and implement execution for `query_knowledge_base`, `save_to_scratchpad`, `write_file`, `edit_file`, `read_file`, `list_dir`, `search`, `get_definition`, and `run_tests`. All read tools are gated by `read_allowed_dirs`; writes are gated by `write_allowed_dirs`; test execution is gated by `test_dir`; RAG tools are gated by store content. Reads and test runs execute without user approval; writes require per-call approval.
+**Responsibilities:** Define tool schemas and implement execution for all LLM-callable tools. All read tools are gated by `read_allowed_dirs`; writes are gated by `write_allowed_dirs`; git tools are gated by `git_root`; test execution is gated by `test_dir`; RAG tools are gated by store content. Reads and test runs execute without user approval; writes require per-call approval.
+
+#### Re-read-after-edit safety
+
+After any successful write (`write_file`, `edit_file`, `insert_at_line`, `move_file`, `delete_file`), the file's resolved path is removed from `turn_read_files`. This forces the model to re-read the file before making another edit to it, ensuring it always operates on the actual current state rather than a stale view.
+
+#### Tool registration
 
 ```python
 def get_tools(config: Config, store: VectorStore) -> list[dict] | None:
@@ -425,8 +432,10 @@ def get_tools(config: Config, store: VectorStore) -> list[dict] | None:
     are enabled.
     query_knowledge_base is included when store has indexed content (store._chunks is non-empty).
     save_to_scratchpad is included whenever any other tool is registered.
-    write_file and edit_file are included when write_allowed_dirs is non-empty.
-    read_file, list_dir, search, and get_definition are included when read_allowed_dirs is non-empty.
+    write_file, edit_file, insert_at_line, delete_file, move_file are included when write_allowed_dirs is non-empty.
+    read_file, list_dir, search, get_definition, find_files are included when read_allowed_dirs is non-empty.
+    git_status, git_log, git_diff, git_blame, git_show_file, git_branches, git_current_branch
+      are included when git_root is not None.
     run_tests is included when test_dir is not None.
     Tool descriptions include the relevant allowed directories / depth levels.
     """
@@ -479,6 +488,60 @@ def execute_rag_query(
       [RAG_2] ...
     Returns "No results found." when store is empty or all top-k results were already seen.
     """
+
+def execute_find_files(arguments: dict, config: Config) -> str:
+    """
+    Validate path against config.read_allowed_dirs, then glob for files matching pattern.
+    arguments: {"path": str, "pattern": str}
+    pattern is a glob string matched via Path.rglob() against file names (e.g. "*.py", "test_*.py").
+    Returns a newline-separated list of matching file paths, or "No matches found.",
+    or an error string if path is outside allowed dirs or not a directory.
+    """
+
+def execute_insert_at_line(arguments: dict, config: Config, turn_read_files: set[Path]) -> tuple[bool, str]:
+    """
+    Validate path against config.write_allowed_dirs, then insert or replace at the given line.
+    arguments: {"path": str, "line_number": int, "content": str, "mode": "before"|"after"|"replace", "description": str}
+    line_number is 1-indexed. mode controls whether content is inserted before/after the target
+    line or replaces it entirely.
+    Requires prior read_file this turn. Shows approval prompt. On approval, writes file and
+    removes path from turn_read_files (re-read required before next edit).
+    Returns (True, "Edited: /path. Re-read required before next edit.") or (False, error/denial).
+    """
+
+def execute_delete_file(arguments: dict, config: Config, turn_read_files: set[Path]) -> tuple[bool, str]:
+    """
+    Validate path against config.write_allowed_dirs, prompt user for approval, delete if approved.
+    arguments: {"path": str, "description": str}
+    Requires prior read_file this turn. On approval, calls path.unlink() and removes path
+    from turn_read_files.
+    Returns (True, "Deleted: /path") or (False, error/denial).
+    """
+
+def execute_move_file(arguments: dict, config: Config, turn_read_files: set[Path]) -> tuple[bool, str]:
+    """
+    Validate src and dst against config.write_allowed_dirs, prompt user for approval, move if approved.
+    arguments: {"src": str, "dst": str, "description": str}
+    src must be in turn_read_files. Creates dst parent directories if needed.
+    On approval, renames src → dst and removes src from turn_read_files.
+    Returns (True, "Moved: /src → /dst") or (False, error/denial).
+    """
+
+class SafeGitOps:
+    """
+    Wraps git.Repo with safety constraints: path arguments for diff/blame/show_file are
+    validated against read_allowed_dirs (resolved as git_root / path). ref arguments are
+    validated via repo.commit(ref) before use — the hexsha is passed to underlying git calls,
+    never the raw user string. No write or remote operations are exposed.
+    """
+    def __init__(self, repo_path: Path, read_allowed_dirs: list[Path]): ...
+    def status(self) -> dict: ...          # dirty, untracked, staged, unstaged
+    def log(self, max_count: int) -> list[dict]: ...   # sha, message, author, date
+    def diff(self, ref, path, staged) -> str: ...      # full diff; path validated if given
+    def blame(self, ref, path) -> str: ...             # per-line blame; path validated
+    def show_file(self, ref, path) -> str: ...         # file at ref; path validated
+    def branches(self) -> list[str]: ...
+    def current_branch(self) -> str: ...
 
 def execute_write_file(arguments: dict, config: Config, turn_read_files: set[Path]) -> tuple[bool, str]:
     """
@@ -944,7 +1007,19 @@ Key bindings:
 | edit_file old_string appears multiple times | Tool returns error string (with count) to model; user is not prompted |
 | User denies edit_file | Tool returns `"Edit denied by user. Path: ..."` to model; session continues |
 | edit_file I/O error | Tool returns error string to model; session continues |
-| read_file/list_dir/search/get_definition — path outside read_allowed_dirs | Tool returns error string to model; no user prompt |
+| read_file/list_dir/search/get_definition/find_files — path outside read_allowed_dirs | Tool returns error string to model; no user prompt |
+| insert_at_line — path outside write_allowed_dirs | Tool returns error string to model; no user prompt |
+| insert_at_line — line_number out of range | Tool returns error string to model; no user prompt |
+| insert_at_line — file not read this turn | Tool returns error string to model; no user prompt |
+| User denies insert_at_line | Tool returns denial string to model; file unchanged |
+| delete_file — path outside write_allowed_dirs | Tool returns error string to model; no user prompt |
+| delete_file — file not read this turn | Tool returns error string to model; no user prompt |
+| User denies delete_file | Tool returns denial string to model; file intact |
+| move_file — src or dst outside write_allowed_dirs | Tool returns error string to model; no user prompt |
+| move_file — src not read this turn | Tool returns error string to model; no user prompt |
+| User denies move_file | Tool returns denial string to model; file unmoved |
+| git_* tools — invalid ref | Tool returns error string to model; no user prompt |
+| git_diff/blame/show_file — path outside read_allowed_dirs | Tool returns error string to model; no user prompt |
 | read_file file not found or I/O error | Tool returns error string to model; session continues |
 | get_definition file not found, not a .py file, or parse error | Tool returns error string to model; session continues |
 | search invalid regex pattern | Tool returns error string to model; session continues |

@@ -7,7 +7,8 @@ A terminal chat tool that wraps the OpenAI API with project-aware context. Point
 ## Features
 
 - **RAG knowledge base** — index any set of local files at startup; the model queries them on demand via vector search rather than stuffing everything into every prompt
-- **File tools** — `read_file`, `list_dir`, `search`, `get_definition` let the model navigate your codebase; `write_file` and `edit_file` let it make changes
+- **File tools** — `read_file`, `list_dir`, `search`, `find_files`, `get_definition` let the model navigate your codebase; `write_file`, `edit_file`, `insert_at_line`, `delete_file`, and `move_file` let it make changes
+- **Git tools** — `git_status`, `git_log`, `git_diff`, `git_blame`, `git_show_file`, `git_branches`, `git_current_branch` give the model read-only access to your repo history; enabled by setting `git_root` in config
 - **Test runner** — `run_tests` executes your test suite and feeds the output back to the model
 - **File attachments** — paste `[[/absolute/path/to/file]]` into any message to inject a file verbatim into context
 - **Skills** — inject reusable behaviour guides (`SKILL.md`) into the session on demand; the model can follow `read_file` links into the skill directory for supporting docs
@@ -18,7 +19,8 @@ A terminal chat tool that wraps the OpenAI API with project-aware context. Point
 
 - **Write operations are gated by directory allowlists** — `write_allowed_dirs` and `read_allowed_dirs` in your config define the only locations the model can touch; requests outside those directories are rejected outright
 - **Every write and edit requires explicit approval** — the tool prints the full path, byte count, reason, and diff before asking `[y/N]`; the model cannot write anything without a keypress from you
-- **The model must read before it can edit or overwrite** — `edit_file` and `write_file` (on existing files) are blocked at runtime if the model has not called `read_file` on that path earlier in the same turn; this prevents blind overwrites where the model fabricates edits without ever seeing the current contents. `read_file` accepts a list of paths so the model can fetch multiple files in one call.
+- **The model must read before it can edit or overwrite** — `edit_file`, `write_file` (on existing files), `insert_at_line`, `delete_file`, and `move_file` are all blocked if the model has not called `read_file` on that path earlier in the same turn; this prevents blind overwrites. After any successful write, the path is removed from the read set — the model must re-read before making a further edit to the same file.
+- **Git tools are read-only by design** — git operations use GitPython's library API rather than a shell subprocess. Paths passed to `git_diff`, `git_blame`, and `git_show_file` are validated against `read_allowed_dirs`. No write or remote operations (push, fetch, commit) are exposed.
 - **File attachments prompt for secrets review** — before injecting any `[[filepath]]` attachment, the tool asks whether you have reviewed the file for secrets (prompt can be disabled with `--unsafe` if you know you will be working with non-secret files)
 - **All file paths must be absolute** — all file paths for read and write operations, including attachments, must be absolute to avoid accidental passing of files
 
@@ -47,6 +49,9 @@ read_allowed_dirs:
 write_allowed_dirs:
   - /home/user/myproject/src
   - /home/user/myproject/tests
+
+# Enable git tools (read-only: status, log, diff, blame, show_file, branches)
+git_root: /home/user/myproject
 
 # Run tests with pixi run pytest
 test_dir: /home/user/myproject
@@ -164,8 +169,9 @@ system_context_fields:
 | `log_folder` | path | **required** | Folder for `chat_*.jsonl` and `debug_*.log` files |
 | `rag_files` | list of paths | `[]` | Files to index into the RAG knowledge base |
 | `startup_docs` | list of paths | `[]` | Files injected verbatim as system messages every turn |
-| `read_allowed_dirs` | list of paths | `[]` | Enables `read_file`, `list_dir`, `search`, `get_definition` |
-| `write_allowed_dirs` | list of paths | `[]` | Enables `write_file`, `edit_file` |
+| `read_allowed_dirs` | list of paths | `[]` | Enables `read_file`, `list_dir`, `search`, `find_files`, `get_definition` |
+| `write_allowed_dirs` | list of paths | `[]` | Enables `write_file`, `edit_file`, `insert_at_line`, `delete_file`, `move_file` |
+| `git_root` | path | `null` | Enables all `git_*` tools (read-only; must exist) |
 | `skills_dir` | path | `null` | Directory of skill subdirectories; enables `/skill` command |
 | `test_dir` | path | `null` | Enables `run_tests`; uses `pixi run pytest` if `pixi.toml` present |
 | `test_timeout` | int (seconds) | `60` | Timeout for `run_tests` |

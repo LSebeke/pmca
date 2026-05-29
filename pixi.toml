@@ -2,7 +2,7 @@
 name = "pmca"
 version = "0.1.0"
 channels = ["conda-forge"]
-platforms = ["linux-64", "win-64"]
+platforms = ["linux-64"]
 
 [dependencies]
 python = ">=3.11"
@@ -13,6 +13,7 @@ numpy = ">=1.26"
 pyyaml = ">=6.0"
 prompt_toolkit = ">=3.0"
 pmca = { path = ".", editable = true }
+gitpython = ">=3.1"
 
 [feature.dev.pypi-dependencies]
 pytest = ">=8.0"

@@ -5,9 +5,220 @@ import re
 import subprocess
 from pathlib import Path
 
+import git as gitlib
+
 from pmca.config import Config
 from pmca.rag.store import VectorStore
 from pmca.types import Chunk, ScratchpadEntry
+
+class SafeGitOps:
+    def __init__(self, repo_path: Path, read_allowed_dirs: list[Path]) -> None:
+        self._repo = gitlib.Repo(repo_path)
+        self._root = Path(self._repo.working_dir)
+        self._read_allowed_dirs = read_allowed_dirs
+
+    def _validate_path(self, path: str) -> Path | str:
+        resolved = (self._root / path).resolve()
+        if not _is_allowed(resolved, self._read_allowed_dirs):
+            dirs_str = ", ".join(str(d) for d in self._read_allowed_dirs)
+            return f"Error: path {resolved} is outside allowed directories: {dirs_str}"
+        return resolved
+
+    def _resolve_ref(self, ref: str):
+        try:
+            return self._repo.commit(ref)
+        except (gitlib.BadName, gitlib.BadObject, ValueError):
+            return None
+
+    def status(self) -> dict:
+        return {
+            "dirty": self._repo.is_dirty(),
+            "untracked": self._repo.untracked_files,
+            "staged": [d.a_path for d in self._repo.index.diff("HEAD")],
+            "unstaged": [d.a_path for d in self._repo.index.diff(None)],
+        }
+
+    def log(self, max_count: int = 20) -> list[dict]:
+        commits = list(self._repo.iter_commits(max_count=max_count))
+        return [
+            {
+                "sha": c.hexsha[:8],
+                "message": c.message.strip(),
+                "author": str(c.author),
+                "date": c.committed_datetime.isoformat(),
+            }
+            for c in commits
+        ]
+
+    def diff(self, ref: str = "HEAD", path: str | None = None, staged: bool = False) -> str:
+        commit = self._resolve_ref(ref)
+        if commit is None:
+            return f"Error: invalid ref '{ref}'"
+
+        if path is not None:
+            result = self._validate_path(path)
+            if isinstance(result, str):
+                return result
+            path_posix = Path(path).as_posix()
+        else:
+            path_posix = None
+
+        try:
+            if staged:
+                diff_args = [commit.hexsha]
+                if path_posix:
+                    diff_args += ["--", path_posix]
+                return self._repo.git.diff("--cached", *diff_args)
+            else:
+                diff_args = [commit.hexsha]
+                if path_posix:
+                    diff_args += ["--", path_posix]
+                return self._repo.git.diff(*diff_args)
+        except gitlib.GitCommandError as e:
+            return f"Error: {e}"
+
+    def blame(self, ref: str = "HEAD", path: str = "") -> str:
+        result = self._validate_path(path)
+        if isinstance(result, str):
+            return result
+
+        commit = self._resolve_ref(ref)
+        if commit is None:
+            return f"Error: invalid ref '{ref}'"
+
+        try:
+            blame = self._repo.blame(commit.hexsha, path)
+        except gitlib.GitCommandError as e:
+            return f"Error: {e}"
+
+        lines = []
+        for entry_commit, entry_lines in blame:
+            sha = entry_commit.hexsha[:8]
+            author = str(entry_commit.author)
+            for line in entry_lines:
+                text = line.decode("utf-8", errors="replace") if isinstance(line, bytes) else line
+                lines.append(f"{sha} {author}: {text}")
+        return "".join(lines)
+
+    def show_file(self, ref: str, path: str) -> str:
+        result = self._validate_path(path)
+        if isinstance(result, str):
+            return result
+
+        commit = self._resolve_ref(ref)
+        if commit is None:
+            return f"Error: invalid ref '{ref}'"
+
+        try:
+            blob = commit.tree / Path(path).as_posix()
+            return blob.data_stream.read().decode("utf-8", errors="replace")
+        except (KeyError, gitlib.GitCommandError) as e:
+            return f"Error: {e}"
+
+    def branches(self) -> list[str]:
+        return [b.name for b in self._repo.branches]
+
+    def current_branch(self) -> str:
+        try:
+            return self._repo.active_branch.name
+        except TypeError:
+            return "(detached HEAD)"
+
+
+_GIT_STATUS_SCHEMA = {
+    "type": "function",
+    "function": {
+        "name": "git_status",
+        "description": "",
+        "parameters": {"type": "object", "properties": {}, "required": [], "additionalProperties": False},
+    },
+}
+
+_GIT_LOG_SCHEMA = {
+    "type": "function",
+    "function": {
+        "name": "git_log",
+        "description": "",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "max_count": {"type": "integer", "description": "Maximum number of commits to return (default 20)."},
+            },
+            "required": [],
+            "additionalProperties": False,
+        },
+    },
+}
+
+_GIT_DIFF_SCHEMA = {
+    "type": "function",
+    "function": {
+        "name": "git_diff",
+        "description": "",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "ref": {"type": "string", "description": "Commit/branch to diff against (default HEAD)."},
+                "path": {"type": "string", "description": "Optional path to scope the diff to a specific file."},
+                "staged": {"type": "boolean", "description": "If true, show staged (index) diff; otherwise show working-tree diff."},
+            },
+            "required": [],
+            "additionalProperties": False,
+        },
+    },
+}
+
+_GIT_BLAME_SCHEMA = {
+    "type": "function",
+    "function": {
+        "name": "git_blame",
+        "description": "",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Repo-relative path of the file to blame."},
+                "ref": {"type": "string", "description": "Commit/branch to blame against (default HEAD)."},
+            },
+            "required": ["path"],
+            "additionalProperties": False,
+        },
+    },
+}
+
+_GIT_SHOW_FILE_SCHEMA = {
+    "type": "function",
+    "function": {
+        "name": "git_show_file",
+        "description": "",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "ref": {"type": "string", "description": "Commit/branch/tag to retrieve the file from."},
+                "path": {"type": "string", "description": "Repo-relative path of the file."},
+            },
+            "required": ["ref", "path"],
+            "additionalProperties": False,
+        },
+    },
+}
+
+_GIT_BRANCHES_SCHEMA = {
+    "type": "function",
+    "function": {
+        "name": "git_branches",
+        "description": "",
+        "parameters": {"type": "object", "properties": {}, "required": [], "additionalProperties": False},
+    },
+}
+
+_GIT_CURRENT_BRANCH_SCHEMA = {
+    "type": "function",
+    "function": {
+        "name": "git_current_branch",
+        "description": "",
+        "parameters": {"type": "object", "properties": {}, "required": [], "additionalProperties": False},
+    },
+}
 
 _WRITE_FILE_SCHEMA = {
     "type": "function",
@@ -117,6 +328,23 @@ _RUN_TESTS_SCHEMA = {
     },
 }
 
+_FIND_FILES_SCHEMA = {
+    "type": "function",
+    "function": {
+        "name": "find_files",
+        "description": "",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Absolute path of the directory to search."},
+                "pattern": {"type": "string", "description": "Glob pattern matched against filenames, e.g. '*.py' or 'test_*.py'."},
+            },
+            "required": ["path", "pattern"],
+            "additionalProperties": False,
+        },
+    },
+}
+
 _GET_DEFINITION_SCHEMA = {
     "type": "function",
     "function": {
@@ -156,6 +384,61 @@ _RAG_SCHEMA = {
     },
 }
 
+
+_INSERT_AT_LINE_SCHEMA = {
+    "type": "function",
+    "function": {
+        "name": "insert_at_line",
+        "description": "",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Absolute path of the file to edit."},
+                "line_number": {"type": "integer", "description": "1-indexed line number to target."},
+                "content": {"type": "string", "description": "Content to insert or use as replacement."},
+                "mode": {"type": "string", "enum": ["before", "after", "replace"], "description": "before: insert before the line; after: insert after; replace: substitute the line."},
+                "description": {"type": "string", "description": "Short human-readable explanation of what is being changed and why."},
+            },
+            "required": ["path", "line_number", "content", "mode", "description"],
+            "additionalProperties": False,
+        },
+    },
+}
+
+_DELETE_FILE_SCHEMA = {
+    "type": "function",
+    "function": {
+        "name": "delete_file",
+        "description": "",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Absolute path of the file to delete."},
+                "description": {"type": "string", "description": "Short human-readable explanation of what is being deleted and why."},
+            },
+            "required": ["path", "description"],
+            "additionalProperties": False,
+        },
+    },
+}
+
+_MOVE_FILE_SCHEMA = {
+    "type": "function",
+    "function": {
+        "name": "move_file",
+        "description": "",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "src": {"type": "string", "description": "Absolute path of the source file."},
+                "dst": {"type": "string", "description": "Absolute path of the destination."},
+                "description": {"type": "string", "description": "Short human-readable explanation of the move and why."},
+            },
+            "required": ["src", "dst", "description"],
+            "additionalProperties": False,
+        },
+    },
+}
 
 _SAVE_TO_SCRATCHPAD_SCHEMA = {
     "type": "function",
@@ -227,6 +510,27 @@ def get_tools(config: Config, store: VectorStore) -> list[dict] | None:
                 "description": f"Edit a file by replacing an exact string. old_string must appear exactly once. Allowed directories: {dirs_str}",
             },
         })
+        tools.append({
+            **_INSERT_AT_LINE_SCHEMA,
+            "function": {
+                **_INSERT_AT_LINE_SCHEMA["function"],
+                "description": f"Insert content before/after a line or replace a line by number. Allowed directories: {dirs_str}",
+            },
+        })
+        tools.append({
+            **_DELETE_FILE_SCHEMA,
+            "function": {
+                **_DELETE_FILE_SCHEMA["function"],
+                "description": f"Delete a file. Requires prior read_file this turn. Allowed directories: {dirs_str}",
+            },
+        })
+        tools.append({
+            **_MOVE_FILE_SCHEMA,
+            "function": {
+                **_MOVE_FILE_SCHEMA["function"],
+                "description": f"Move/rename a file. src must have been read this turn. Allowed directories: {dirs_str}",
+            },
+        })
 
     if config.read_allowed_dirs:
         dirs_str = ", ".join(str(d) for d in config.read_allowed_dirs)
@@ -237,11 +541,24 @@ def get_tools(config: Config, store: VectorStore) -> list[dict] | None:
             (_LIST_DIR_SCHEMA, "List directory contents." + desc_suffix),
             (_SEARCH_SCHEMA, "Search for a regex pattern in a file or directory tree." + desc_suffix),
             (_GET_DEFINITION_SCHEMA, "Get the full source of a Python function or class." + desc_suffix),
+            (_FIND_FILES_SCHEMA, "Find files matching a glob pattern." + desc_suffix),
         ]:
             tools.append({
                 **base_schema,
                 "function": {**base_schema["function"], "description": desc},
             })
+
+    if config.git_root is not None:
+        for base_schema, desc in [
+            (_GIT_STATUS_SCHEMA, "Show git working tree status (dirty, staged, unstaged, untracked)."),
+            (_GIT_LOG_SCHEMA, "Show recent git commit history."),
+            (_GIT_DIFF_SCHEMA, "Show git diff against a ref. Optional path filter and staged flag."),
+            (_GIT_BLAME_SCHEMA, "Show per-line git blame for a file."),
+            (_GIT_SHOW_FILE_SCHEMA, "Show file content at a specific git ref."),
+            (_GIT_BRANCHES_SCHEMA, "List all local git branches."),
+            (_GIT_CURRENT_BRANCH_SCHEMA, "Show the current git branch."),
+        ]:
+            tools.append({**base_schema, "function": {**base_schema["function"], "description": desc}})
 
     if config.test_dir is not None:
         tools.append({
@@ -370,7 +687,8 @@ def execute_write_file(arguments: dict, config: Config, turn_read_files: set[Pat
 
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(content, encoding="utf-8")
-    return True, f"Written: {target} ({size} bytes)"
+    turn_read_files.discard(target)
+    return True, f"Written: {target} ({size} bytes). Re-read required before next edit."
 
 
 def execute_edit_file(arguments: dict, config: Config, turn_read_files: set[Path]) -> tuple[bool, str]:
@@ -421,7 +739,137 @@ def execute_edit_file(arguments: dict, config: Config, turn_read_files: set[Path
     except OSError as e:
         return False, f"Error writing {target}: {e}"
 
-    return True, f"Edited: {target}"
+    turn_read_files.discard(target)
+    return True, f"Edited: {target}. Re-read required before next edit."
+
+
+def execute_insert_at_line(arguments: dict, config: Config, turn_read_files: set[Path]) -> tuple[bool, str]:
+    raw_path = arguments["path"]
+    line_number = int(arguments["line_number"])
+    content = arguments["content"]
+    mode = arguments["mode"]
+    reason = arguments.get("description", "")
+
+    target = Path(raw_path).resolve()
+
+    if not _is_allowed(target, config.write_allowed_dirs):
+        dirs_str = ", ".join(str(d) for d in config.write_allowed_dirs)
+        return False, f"Error: path {target} is outside allowed directories: {dirs_str}"
+
+    if not target.exists():
+        return False, f"Error: file not found: {target}"
+
+    if target not in turn_read_files:
+        return False, f"Error: {target} has not been read this turn. Call read_file first."
+
+    try:
+        lines = target.read_text(encoding="utf-8").splitlines(keepends=True)
+    except OSError as e:
+        return False, f"Error reading {target}: {e}"
+
+    if line_number < 1 or line_number > len(lines):
+        return False, f"Error: line_number {line_number} is out of range (file has {len(lines)} lines)"
+
+    idx = line_number - 1
+    target_line = lines[idx].rstrip("\n")
+
+    print(f"[insert_at_line] {target} (line {line_number}, mode={mode})")
+    print(f"Reason: {reason}")
+    print("--- target line ---")
+    print(target_line)
+    print("--- insert ---")
+    print(content)
+    print("---")
+    print("Approve? [y/N] ", end="", flush=True)
+    answer = input()
+
+    if answer.strip().lower() != "y":
+        return False, f"Edit denied by user. Path: {target}"
+
+    if mode == "before":
+        lines.insert(idx, content if content.endswith("\n") else content + "\n")
+    elif mode == "after":
+        lines.insert(idx + 1, content if content.endswith("\n") else content + "\n")
+    elif mode == "replace":
+        lines[idx] = content if content.endswith("\n") else content + "\n"
+
+    try:
+        target.write_text("".join(lines), encoding="utf-8")
+    except OSError as e:
+        return False, f"Error writing {target}: {e}"
+
+    turn_read_files.discard(target)
+    return True, f"Edited: {target}. Re-read required before next edit."
+
+
+def execute_delete_file(arguments: dict, config: Config, turn_read_files: set[Path]) -> tuple[bool, str]:
+    raw_path = arguments["path"]
+    reason = arguments.get("description", "")
+
+    target = Path(raw_path).resolve()
+
+    if not _is_allowed(target, config.write_allowed_dirs):
+        dirs_str = ", ".join(str(d) for d in config.write_allowed_dirs)
+        return False, f"Error: path {target} is outside allowed directories: {dirs_str}"
+
+    if not target.exists():
+        return False, f"Error: file not found: {target}"
+
+    if target not in turn_read_files:
+        return False, f"Error: {target} has not been read this turn. Call read_file first."
+
+    print(f"[delete_file] {target}")
+    print(f"Reason: {reason}")
+    print("Approve? [y/N] ", end="", flush=True)
+    answer = input()
+
+    if answer.strip().lower() != "y":
+        return False, f"Delete denied by user. Path: {target}"
+
+    try:
+        target.unlink()
+    except OSError as e:
+        return False, f"Error deleting {target}: {e}"
+
+    turn_read_files.discard(target)
+    return True, f"Deleted: {target}"
+
+
+def execute_move_file(arguments: dict, config: Config, turn_read_files: set[Path]) -> tuple[bool, str]:
+    src = Path(arguments["src"]).resolve()
+    dst = Path(arguments["dst"]).resolve()
+    reason = arguments.get("description", "")
+
+    if not _is_allowed(src, config.write_allowed_dirs):
+        dirs_str = ", ".join(str(d) for d in config.write_allowed_dirs)
+        return False, f"Error: src {src} is outside allowed directories: {dirs_str}"
+
+    if not _is_allowed(dst, config.write_allowed_dirs):
+        dirs_str = ", ".join(str(d) for d in config.write_allowed_dirs)
+        return False, f"Error: dst {dst} is outside allowed directories: {dirs_str}"
+
+    if not src.exists():
+        return False, f"Error: source file not found: {src}"
+
+    if src not in turn_read_files:
+        return False, f"Error: {src} has not been read this turn. Call read_file first."
+
+    print(f"[move_file] {src} → {dst}")
+    print(f"Reason: {reason}")
+    print("Approve? [y/N] ", end="", flush=True)
+    answer = input()
+
+    if answer.strip().lower() != "y":
+        return False, f"Move denied by user. src: {src}"
+
+    try:
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        src.rename(dst)
+    except OSError as e:
+        return False, f"Error moving {src} → {dst}: {e}"
+
+    turn_read_files.discard(src)
+    return True, f"Moved: {src} → {dst}"
 
 
 def execute_read_file(arguments: dict, config: Config, turn_read_files: set[Path]) -> str:
@@ -463,6 +911,26 @@ def execute_list_dir(arguments: dict, config: Config) -> str:
         paths = sorted(target.iterdir())
 
     return "\n".join(str(p) for p in paths) if paths else ""
+
+
+def execute_find_files(arguments: dict, config: Config) -> str:
+    target = Path(arguments["path"]).resolve()
+    pattern = arguments["pattern"]
+
+    if not _is_allowed(target, config.read_allowed_dirs):
+        dirs_str = ", ".join(str(d) for d in config.read_allowed_dirs)
+        return f"Error: path {target} is outside allowed directories: {dirs_str}"
+
+    if not target.exists():
+        return f"Error: path not found: {target}"
+    if not target.is_dir():
+        return f"Error: not a directory: {target}"
+
+    matches = sorted(target.rglob(pattern))
+    matches = [p for p in matches if p.is_file()]
+    if not matches:
+        return "No matches found."
+    return "\n".join(str(p) for p in matches)
 
 
 def execute_search(arguments: dict, config: Config) -> str:
@@ -539,6 +1007,56 @@ def execute_get_definition(arguments: dict, config: Config) -> str:
                     return f"Error: symbol '{symbol}' not found in {target}"
 
     return f"Error: symbol '{parts[0]}' not found in {target}"
+
+
+def execute_git_status(config: Config) -> str:
+    ops = SafeGitOps(config.git_root, config.read_allowed_dirs)
+    status = ops.status()
+    lines = [f"dirty: {status['dirty']}"]
+    if status["staged"]:
+        lines.append("staged: " + ", ".join(status["staged"]))
+    if status["unstaged"]:
+        lines.append("unstaged: " + ", ".join(status["unstaged"]))
+    if status["untracked"]:
+        lines.append("untracked: " + ", ".join(status["untracked"]))
+    return "\n".join(lines)
+
+
+def execute_git_log(arguments: dict, config: Config) -> str:
+    max_count = int(arguments.get("max_count", 20))
+    ops = SafeGitOps(config.git_root, config.read_allowed_dirs)
+    commits = ops.log(max_count=max_count)
+    lines = [f"{c['sha']} {c['date'][:10]} {c['author']}: {c['message']}" for c in commits]
+    return "\n".join(lines) if lines else "No commits found."
+
+
+def execute_git_diff(arguments: dict, config: Config) -> str:
+    ops = SafeGitOps(config.git_root, config.read_allowed_dirs)
+    return ops.diff(
+        ref=arguments.get("ref", "HEAD"),
+        path=arguments.get("path"),
+        staged=bool(arguments.get("staged", False)),
+    )
+
+
+def execute_git_blame(arguments: dict, config: Config) -> str:
+    ops = SafeGitOps(config.git_root, config.read_allowed_dirs)
+    return ops.blame(ref=arguments.get("ref", "HEAD"), path=arguments["path"])
+
+
+def execute_git_show_file(arguments: dict, config: Config) -> str:
+    ops = SafeGitOps(config.git_root, config.read_allowed_dirs)
+    return ops.show_file(ref=arguments["ref"], path=arguments["path"])
+
+
+def execute_git_branches(config: Config) -> str:
+    ops = SafeGitOps(config.git_root, config.read_allowed_dirs)
+    return "\n".join(ops.branches())
+
+
+def execute_git_current_branch(config: Config) -> str:
+    ops = SafeGitOps(config.git_root, config.read_allowed_dirs)
+    return ops.current_branch()
 
 
 def execute_run_tests(arguments: dict, config: Config) -> tuple[bool, str]:

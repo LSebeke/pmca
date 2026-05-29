@@ -574,6 +574,48 @@ def test_max_scratchpad_entries_raises_when_nonpositive(tmp_path):
         load_config(str(cfg_path))
 
 
+# ---------------------------------------------------------------------------
+# git_root
+# ---------------------------------------------------------------------------
+
+def test_git_root_defaults_to_none(tmp_path):
+    rag_file = tmp_path / "code.py"
+    rag_file.write_text("x = 1")
+    cfg_path = write_yaml(tmp_path, "c.yaml", minimal_yaml(rag_file, tmp_path / "logs"))
+    cfg = load_config(str(cfg_path))
+    assert cfg.git_root is None
+
+
+def test_git_root_parsed_from_yaml(tmp_path):
+    rag_file = tmp_path / "code.py"
+    rag_file.write_text("x = 1")
+    git_root = tmp_path / "repo"
+    git_root.mkdir()
+    yaml_content = minimal_yaml(rag_file, tmp_path / "logs") + f"git_root: {git_root}\n"
+    cfg_path = write_yaml(tmp_path, "c.yaml", yaml_content)
+    cfg = load_config(str(cfg_path))
+    assert cfg.git_root == git_root
+
+
+def test_git_root_raises_when_not_absolute(tmp_path):
+    rag_file = tmp_path / "code.py"
+    rag_file.write_text("x = 1")
+    yaml_content = minimal_yaml(rag_file, tmp_path / "logs") + "git_root: relative/repo\n"
+    cfg_path = write_yaml(tmp_path, "c.yaml", yaml_content)
+    with pytest.raises(ConfigError, match="absolute"):
+        load_config(str(cfg_path))
+
+
+def test_git_root_raises_when_does_not_exist(tmp_path):
+    rag_file = tmp_path / "code.py"
+    rag_file.write_text("x = 1")
+    missing = tmp_path / "no_such_repo"
+    yaml_content = minimal_yaml(rag_file, tmp_path / "logs") + f"git_root: {missing}\n"
+    cfg_path = write_yaml(tmp_path, "c.yaml", yaml_content)
+    with pytest.raises(ConfigError, match="not found|does not exist"):
+        load_config(str(cfg_path))
+
+
 @pytest.mark.parametrize("field,value", [
     ("max_attachment_kb", 0),
     ("max_attachment_kb", -1),

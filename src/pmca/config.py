@@ -26,6 +26,7 @@ class Config:
     read_allowed_dirs: list[Path] = field(default_factory=list)
     system_context_fields: list[str] = field(default_factory=list)
     skills_dir: Path | None = None
+    git_root: Path | None = None
     test_dir: Path | None = None
     test_timeout: int = 60
     max_attachment_kb: int = 500
@@ -56,6 +57,7 @@ def load_config(config_name: str) -> Config:
     _validate_write_allowed_dirs(data.get("write_allowed_dirs") or [])
     _validate_read_allowed_dirs(data.get("read_allowed_dirs") or [])
     _validate_skills_dir(data.get("skills_dir"))
+    _validate_git_root(data.get("git_root"))
     _validate_test_dir(data.get("test_dir"))
     _validate_positive_ints(data)
 
@@ -70,6 +72,7 @@ def load_config(config_name: str) -> Config:
         read_allowed_dirs=[Path(p).expanduser() for p in (data.get("read_allowed_dirs") or [])],
         system_context_fields=list(data.get("system_context_fields") or []),
         skills_dir=Path(data["skills_dir"]).expanduser() if data.get("skills_dir") else None,
+        git_root=Path(data["git_root"]).expanduser() if data.get("git_root") else None,
         test_dir=Path(data["test_dir"]).expanduser() if data.get("test_dir") else None,
         test_timeout=data.get("test_timeout", 60),
         max_attachment_kb=data.get("max_attachment_kb", 500),
@@ -138,6 +141,16 @@ def _validate_skills_dir(value: str | None) -> None:
         raise ConfigError(f"skills_dir must be an absolute path, got: {value}")
     if not p.exists():
         raise ConfigError(f"skills_dir not found: {value}")
+
+
+def _validate_git_root(value: str | None) -> None:
+    if value is None:
+        return
+    p = Path(value).expanduser()
+    if not p.is_absolute():
+        raise ConfigError(f"git_root must be an absolute path, got: {value}")
+    if not p.exists():
+        raise ConfigError(f"git_root not found: {value}")
 
 
 def _validate_test_dir(value: str | None) -> None:

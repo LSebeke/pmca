@@ -4,15 +4,21 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+import git as gitlib
 
 from unittest.mock import MagicMock
 
 from pmca.config import Config
 from pmca.rag.store import VectorStore
 from pmca.tools import (
+    SafeGitOps,
+    execute_delete_file,
     execute_edit_file,
+    execute_find_files,
     execute_get_definition,
+    execute_insert_at_line,
     execute_list_dir,
+    execute_move_file,
     execute_rag_query,
     execute_read_file,
     execute_run_tests,
@@ -488,6 +494,19 @@ def test_edit_file_replaces_and_writes_on_approval(tmp_path):
     assert f.read_text() == "x = 99\ny = 2\n"
 
 
+def test_edit_file_removes_path_from_turn_read_files_after_success(tmp_path):
+    f = tmp_path / "code.py"
+    f.write_text("x = 1\n")
+    cfg = _config(write_allowed_dirs=[tmp_path])
+    turn_read_files = {f.resolve()}
+    args = {"path": str(f), "old_string": "x = 1", "new_string": "x = 2", "description": "t"}
+    with patch("builtins.input", return_value="y"):
+        ok, msg = execute_edit_file(args, cfg, turn_read_files)
+    assert ok is True
+    assert f.resolve() not in turn_read_files
+    assert "Re-read" in msg
+
+
 def test_edit_file_replaces_only_first_when_one_occurrence(tmp_path):
     f = tmp_path / "code.py"
     f.write_text("a = 1\nb = 2\n")
@@ -890,6 +909,407 @@ def test_run_tests_returns_false_on_oserror(tmp_path):
         ok, result = execute_run_tests({}, cfg)
     assert ok is False
     assert "error" in result.lower()
+
+
+# ---------------------------------------------------------------------------
+# execute_insert_at_line
+# ---------------------------------------------------------------------------
+
+def test_insert_at_line_returns_error_when_outside_allowed_dirs(tmp_path):
+    allowed = tmp_path / "allowed"
+    cfg = _config(write_allowed_dirs=[allowed])
+    args = {"path": str(tmp_path / "sneaky.py"), "line_number": 1, "content": "x", "mode": "before", "description": "t"}
+    ok, msg = execute_insert_at_line(args, cfg, set())
+    assert ok is False
+    assert "outside allowed" in msg.lower()
+
+
+def test_insert_at_line_returns_error_when_not_read_this_turn(tmp_path):
+    f = tmp_path / "code.py"
+    f.write_text("a\nb\nc\n")
+    cfg = _config(write_allowed_dirs=[tmp_path])
+    args = {"path": str(f), "line_number": 2, "content": "x", "mode": "after", "description": "t"}
+    ok, msg = execute_insert_at_line(args, cfg, set())
+    assert ok is False
+    assert "read_file" in msg
+
+
+def test_insert_at_line_returns_error_when_line_number_out_of_range(tmp_path):
+    f = tmp_path / "code.py"
+    f.write_text("a\nb\n")
+    cfg = _config(write_allowed_dirs=[tmp_path])
+    args = {"path": str(f), "line_number": 99, "content": "x", "mode": "before", "description": "t"}
+    ok, msg = execute_insert_at_line(args, cfg, {f.resolve()})
+    assert ok is False
+    assert "error" in msg.lower()
+
+
+def test_insert_at_line_before_inserts_before_target_line(tmp_path):
+    f = tmp_path / "code.py"
+    f.write_text("a\nb\nc\n")
+    cfg = _config(write_allowed_dirs=[tmp_path])
+    args = {"path": str(f), "line_number": 2, "content": "X\n", "mode": "before", "description": "t"}
+    with patch("builtins.input", return_value="y"):
+        ok, _ = execute_insert_at_line(args, cfg, {f.resolve()})
+    assert ok is True
+    assert f.read_text() == "a\nX\nb\nc\n"
+
+
+def test_insert_at_line_after_inserts_after_target_line(tmp_path):
+    f = tmp_path / "code.py"
+    f.write_text("a\nb\nc\n")
+    cfg = _config(write_allowed_dirs=[tmp_path])
+    args = {"path": str(f), "line_number": 2, "content": "X\n", "mode": "after", "description": "t"}
+    with patch("builtins.input", return_value="y"):
+        ok, _ = execute_insert_at_line(args, cfg, {f.resolve()})
+    assert ok is True
+    assert f.read_text() == "a\nb\nX\nc\n"
+
+
+def test_insert_at_line_replace_substitutes_target_line(tmp_path):
+    f = tmp_path / "code.py"
+    f.write_text("a\nb\nc\n")
+    cfg = _config(write_allowed_dirs=[tmp_path])
+    args = {"path": str(f), "line_number": 2, "content": "X\n", "mode": "replace", "description": "t"}
+    with patch("builtins.input", return_value="y"):
+        ok, _ = execute_insert_at_line(args, cfg, {f.resolve()})
+    assert ok is True
+    assert f.read_text() == "a\nX\nc\n"
+
+
+def test_insert_at_line_removes_path_from_turn_read_files_after_success(tmp_path):
+    f = tmp_path / "code.py"
+    f.write_text("a\nb\n")
+    cfg = _config(write_allowed_dirs=[tmp_path])
+    turn_read_files = {f.resolve()}
+    args = {"path": str(f), "line_number": 1, "content": "X\n", "mode": "after", "description": "t"}
+    with patch("builtins.input", return_value="y"):
+        ok, msg = execute_insert_at_line(args, cfg, turn_read_files)
+    assert ok is True
+    assert f.resolve() not in turn_read_files
+    assert "Re-read" in msg
+
+
+def test_insert_at_line_denial_does_not_modify_file(tmp_path):
+    f = tmp_path / "code.py"
+    f.write_text("a\nb\n")
+    cfg = _config(write_allowed_dirs=[tmp_path])
+    args = {"path": str(f), "line_number": 1, "content": "X\n", "mode": "replace", "description": "t"}
+    with patch("builtins.input", return_value="n"):
+        ok, msg = execute_insert_at_line(args, cfg, {f.resolve()})
+    assert ok is False
+    assert f.read_text() == "a\nb\n"
+
+
+def test_get_tools_includes_insert_at_line_when_write_dirs_configured(tmp_path):
+    cfg = _config(write_allowed_dirs=[tmp_path])
+    tools = get_tools(cfg, _empty_store())
+    names = {t["function"]["name"] for t in tools}
+    assert "insert_at_line" in names
+
+
+# ---------------------------------------------------------------------------
+# execute_delete_file
+# ---------------------------------------------------------------------------
+
+def test_delete_file_returns_error_when_outside_allowed_dirs(tmp_path):
+    allowed = tmp_path / "allowed"
+    cfg = _config(write_allowed_dirs=[allowed])
+    ok, msg = execute_delete_file({"path": str(tmp_path / "sneaky.py"), "description": "t"}, cfg, set())
+    assert ok is False
+    assert "outside allowed" in msg.lower()
+
+
+def test_delete_file_returns_error_when_not_read_this_turn(tmp_path):
+    f = tmp_path / "file.py"
+    f.write_text("x")
+    cfg = _config(write_allowed_dirs=[tmp_path])
+    ok, msg = execute_delete_file({"path": str(f), "description": "t"}, cfg, set())
+    assert ok is False
+    assert "read_file" in msg
+
+
+def test_delete_file_returns_error_when_file_not_found(tmp_path):
+    cfg = _config(write_allowed_dirs=[tmp_path])
+    ok, msg = execute_delete_file({"path": str(tmp_path / "missing.py"), "description": "t"}, cfg, {(tmp_path / "missing.py").resolve()})
+    assert ok is False
+    assert "not found" in msg.lower()
+
+
+def test_delete_file_deletes_on_approval(tmp_path):
+    f = tmp_path / "file.py"
+    f.write_text("x")
+    cfg = _config(write_allowed_dirs=[tmp_path])
+    with patch("builtins.input", return_value="y"):
+        ok, msg = execute_delete_file({"path": str(f), "description": "t"}, cfg, {f.resolve()})
+    assert ok is True
+    assert not f.exists()
+    assert "Deleted" in msg
+
+
+def test_delete_file_denial_leaves_file_intact(tmp_path):
+    f = tmp_path / "file.py"
+    f.write_text("x")
+    cfg = _config(write_allowed_dirs=[tmp_path])
+    with patch("builtins.input", return_value="n"):
+        ok, _ = execute_delete_file({"path": str(f), "description": "t"}, cfg, {f.resolve()})
+    assert ok is False
+    assert f.exists()
+
+
+def test_delete_file_removes_path_from_turn_read_files_after_success(tmp_path):
+    f = tmp_path / "file.py"
+    f.write_text("x")
+    cfg = _config(write_allowed_dirs=[tmp_path])
+    turn_read_files = {f.resolve()}
+    with patch("builtins.input", return_value="y"):
+        execute_delete_file({"path": str(f), "description": "t"}, cfg, turn_read_files)
+    assert f.resolve() not in turn_read_files
+
+
+def test_get_tools_includes_delete_file_when_write_dirs_configured(tmp_path):
+    cfg = _config(write_allowed_dirs=[tmp_path])
+    tools = get_tools(cfg, _empty_store())
+    names = {t["function"]["name"] for t in tools}
+    assert "delete_file" in names
+
+
+# ---------------------------------------------------------------------------
+# execute_move_file
+# ---------------------------------------------------------------------------
+
+def test_move_file_returns_error_when_src_outside_allowed_dirs(tmp_path):
+    allowed = tmp_path / "allowed"
+    cfg = _config(write_allowed_dirs=[allowed])
+    ok, msg = execute_move_file({"src": str(tmp_path / "sneaky.py"), "dst": str(allowed / "dst.py"), "description": "t"}, cfg, set())
+    assert ok is False
+    assert "outside allowed" in msg.lower()
+
+
+def test_move_file_returns_error_when_dst_outside_allowed_dirs(tmp_path):
+    allowed = tmp_path / "allowed"
+    allowed.mkdir()
+    f = allowed / "src.py"
+    f.write_text("x")
+    cfg = _config(write_allowed_dirs=[allowed])
+    ok, msg = execute_move_file({"src": str(f), "dst": str(tmp_path / "escape.py"), "description": "t"}, cfg, {f.resolve()})
+    assert ok is False
+    assert "outside allowed" in msg.lower()
+
+
+def test_move_file_returns_error_when_not_read_this_turn(tmp_path):
+    f = tmp_path / "src.py"
+    f.write_text("x")
+    cfg = _config(write_allowed_dirs=[tmp_path])
+    ok, msg = execute_move_file({"src": str(f), "dst": str(tmp_path / "dst.py"), "description": "t"}, cfg, set())
+    assert ok is False
+    assert "read_file" in msg
+
+
+def test_move_file_moves_on_approval(tmp_path):
+    f = tmp_path / "src.py"
+    f.write_text("hello")
+    dst = tmp_path / "dst.py"
+    cfg = _config(write_allowed_dirs=[tmp_path])
+    with patch("builtins.input", return_value="y"):
+        ok, msg = execute_move_file({"src": str(f), "dst": str(dst), "description": "t"}, cfg, {f.resolve()})
+    assert ok is True
+    assert not f.exists()
+    assert dst.read_text() == "hello"
+    assert "Moved" in msg
+
+
+def test_move_file_creates_parent_dirs(tmp_path):
+    f = tmp_path / "src.py"
+    f.write_text("x")
+    dst = tmp_path / "deep" / "nested" / "dst.py"
+    cfg = _config(write_allowed_dirs=[tmp_path])
+    with patch("builtins.input", return_value="y"):
+        ok, _ = execute_move_file({"src": str(f), "dst": str(dst), "description": "t"}, cfg, {f.resolve()})
+    assert ok is True
+    assert dst.exists()
+
+
+def test_move_file_removes_src_from_turn_read_files_after_success(tmp_path):
+    f = tmp_path / "src.py"
+    f.write_text("x")
+    turn_read_files = {f.resolve()}
+    cfg = _config(write_allowed_dirs=[tmp_path])
+    with patch("builtins.input", return_value="y"):
+        execute_move_file({"src": str(f), "dst": str(tmp_path / "dst.py"), "description": "t"}, cfg, turn_read_files)
+    assert f.resolve() not in turn_read_files
+
+
+def test_get_tools_includes_move_file_when_write_dirs_configured(tmp_path):
+    cfg = _config(write_allowed_dirs=[tmp_path])
+    tools = get_tools(cfg, _empty_store())
+    names = {t["function"]["name"] for t in tools}
+    assert "move_file" in names
+
+
+# ---------------------------------------------------------------------------
+# execute_find_files
+# ---------------------------------------------------------------------------
+
+def test_find_files_returns_error_when_outside_allowed_dirs(tmp_path):
+    allowed = tmp_path / "allowed"
+    cfg = _config(read_allowed_dirs=[allowed])
+    result = execute_find_files({"path": str(tmp_path / "other"), "pattern": "*.py"}, cfg)
+    assert "outside allowed" in result.lower()
+
+
+def test_find_files_returns_matching_files(tmp_path):
+    (tmp_path / "a.py").write_text("")
+    (tmp_path / "b.txt").write_text("")
+    (tmp_path / "sub").mkdir()
+    (tmp_path / "sub" / "c.py").write_text("")
+    cfg = _config(read_allowed_dirs=[tmp_path])
+    result = execute_find_files({"path": str(tmp_path), "pattern": "*.py"}, cfg)
+    assert "a.py" in result
+    assert "c.py" in result
+    assert "b.txt" not in result
+
+
+def test_find_files_returns_no_matches_message(tmp_path):
+    (tmp_path / "a.py").write_text("")
+    cfg = _config(read_allowed_dirs=[tmp_path])
+    result = execute_find_files({"path": str(tmp_path), "pattern": "*.md"}, cfg)
+    assert "no matches" in result.lower()
+
+
+def test_find_files_returns_error_when_path_not_found(tmp_path):
+    cfg = _config(read_allowed_dirs=[tmp_path])
+    result = execute_find_files({"path": str(tmp_path / "missing"), "pattern": "*.py"}, cfg)
+    assert "error" in result.lower()
+
+
+def test_get_tools_includes_find_files_when_read_dirs_configured(tmp_path):
+    cfg = _config(read_allowed_dirs=[tmp_path])
+    tools = get_tools(cfg, _empty_store())
+    names = {t["function"]["name"] for t in tools}
+    assert "find_files" in names
+
+# ---------------------------------------------------------------------------
+# SafeGitOps + git tool registration
+# ---------------------------------------------------------------------------
+
+def _make_git_repo(tmp_path: Path) -> Path:
+    repo = gitlib.Repo.init(tmp_path)
+    repo.config_writer().set_value("user", "name", "Test").release()
+    repo.config_writer().set_value("user", "email", "test@test.com").release()
+    f = tmp_path / "hello.py"
+    f.write_text("x = 1\n")
+    repo.index.add(["hello.py"])
+    repo.index.commit("initial commit")
+    return tmp_path
+
+
+def test_safe_git_ops_status_returns_dict(tmp_path):
+    _make_git_repo(tmp_path)
+    ops = SafeGitOps(tmp_path, read_allowed_dirs=[tmp_path])
+    status = ops.status()
+    assert "dirty" in status
+    assert "untracked" in status
+    assert "staged" in status
+    assert "unstaged" in status
+
+
+def test_safe_git_ops_log_returns_commit_list(tmp_path):
+    _make_git_repo(tmp_path)
+    ops = SafeGitOps(tmp_path, read_allowed_dirs=[tmp_path])
+    log = ops.log(max_count=5)
+    assert isinstance(log, list)
+    assert len(log) == 1
+    assert "sha" in log[0]
+    assert "message" in log[0]
+    assert log[0]["message"] == "initial commit"
+
+
+def test_safe_git_ops_branches_returns_list(tmp_path):
+    _make_git_repo(tmp_path)
+    ops = SafeGitOps(tmp_path, read_allowed_dirs=[tmp_path])
+    branches = ops.branches()
+    assert isinstance(branches, list)
+    assert len(branches) >= 1
+
+
+def test_safe_git_ops_current_branch_returns_string(tmp_path):
+    _make_git_repo(tmp_path)
+    ops = SafeGitOps(tmp_path, read_allowed_dirs=[tmp_path])
+    branch = ops.current_branch()
+    assert isinstance(branch, str)
+
+
+def test_safe_git_ops_diff_returns_string(tmp_path):
+    _make_git_repo(tmp_path)
+    (tmp_path / "hello.py").write_text("x = 2\n")
+    ops = SafeGitOps(tmp_path, read_allowed_dirs=[tmp_path])
+    result = ops.diff(ref="HEAD")
+    assert isinstance(result, str)
+
+
+def test_safe_git_ops_diff_with_path_filter_validates_against_read_allowed_dirs(tmp_path):
+    _make_git_repo(tmp_path)
+    allowed = tmp_path / "src"
+    allowed.mkdir()
+    ops = SafeGitOps(tmp_path, read_allowed_dirs=[allowed])
+    result = ops.diff(ref="HEAD", path="hello.py")
+    assert "Error" in result or "outside allowed" in result.lower()
+
+
+def test_safe_git_ops_show_file_returns_content(tmp_path):
+    _make_git_repo(tmp_path)
+    ops = SafeGitOps(tmp_path, read_allowed_dirs=[tmp_path])
+    content = ops.show_file(ref="HEAD", path="hello.py")
+    assert "x = 1" in content
+
+
+def test_safe_git_ops_show_file_rejects_path_outside_read_allowed_dirs(tmp_path):
+    _make_git_repo(tmp_path)
+    allowed = tmp_path / "src"
+    allowed.mkdir()
+    ops = SafeGitOps(tmp_path, read_allowed_dirs=[allowed])
+    result = ops.show_file(ref="HEAD", path="hello.py")
+    assert "Error" in result or "outside allowed" in result.lower()
+
+
+def test_safe_git_ops_blame_returns_string(tmp_path):
+    _make_git_repo(tmp_path)
+    ops = SafeGitOps(tmp_path, read_allowed_dirs=[tmp_path])
+    result = ops.blame(ref="HEAD", path="hello.py")
+    assert isinstance(result, str)
+    assert "x = 1" in result
+
+
+def test_safe_git_ops_blame_rejects_path_outside_read_allowed_dirs(tmp_path):
+    _make_git_repo(tmp_path)
+    allowed = tmp_path / "src"
+    allowed.mkdir()
+    ops = SafeGitOps(tmp_path, read_allowed_dirs=[allowed])
+    result = ops.blame(ref="HEAD", path="hello.py")
+    assert "Error" in result or "outside allowed" in result.lower()
+
+
+def test_safe_git_ops_rejects_invalid_ref(tmp_path):
+    _make_git_repo(tmp_path)
+    ops = SafeGitOps(tmp_path, read_allowed_dirs=[tmp_path])
+    result = ops.diff(ref="no_such_ref_xyz")
+    assert "Error" in result or "invalid" in result.lower()
+
+
+def test_get_tools_includes_git_tools_when_git_root_configured(tmp_path):
+    _make_git_repo(tmp_path)
+    cfg = _config(git_root=tmp_path, read_allowed_dirs=[tmp_path])
+    tools = get_tools(cfg, _empty_store())
+    names = {t["function"]["name"] for t in tools}
+    assert {"git_status", "git_log", "git_diff", "git_blame", "git_show_file", "git_branches", "git_current_branch"}.issubset(names)
+
+
+def test_get_tools_excludes_git_tools_when_git_root_not_set(tmp_path):
+    cfg = _config(read_allowed_dirs=[tmp_path])
+    tools = get_tools(cfg, _empty_store())
+    names = {t["function"]["name"] for t in tools}
+    assert not any(n.startswith("git_") for n in names)
 
 
 # ---------------------------------------------------------------------------
