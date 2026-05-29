@@ -10,6 +10,7 @@ A terminal chat tool that wraps the OpenAI API with project-aware context. Point
 - **File tools** — `read_file`, `list_dir`, `search`, `get_definition` let the model navigate your codebase; `write_file` and `edit_file` let it make changes
 - **Test runner** — `run_tests` executes your test suite and feeds the output back to the model
 - **File attachments** — paste `[[/absolute/path/to/file]]` into any message to inject a file verbatim into context
+- **Skills** — inject reusable behaviour guides (`SKILL.md`) into the session on demand; the model can follow `read_file` links into the skill directory for supporting docs
 - **Persistent scratchpad** — the model saves key excerpts from tool call returns across turns, so it doesn't lose what it read earlier in the session
 - **Session resume** — pick up any previous session exactly where you left off
 
@@ -165,6 +166,7 @@ system_context_fields:
 | `startup_docs` | list of paths | `[]` | Files injected verbatim as system messages every turn |
 | `read_allowed_dirs` | list of paths | `[]` | Enables `read_file`, `list_dir`, `search`, `get_definition` |
 | `write_allowed_dirs` | list of paths | `[]` | Enables `write_file`, `edit_file` |
+| `skills_dir` | path | `null` | Directory of skill subdirectories; enables `/skill` command |
 | `test_dir` | path | `null` | Enables `run_tests`; uses `pixi run pytest` if `pixi.toml` present |
 | `test_timeout` | int (seconds) | `60` | Timeout for `run_tests` |
 | `rag_shallow_k` | int | `3` | Chunks returned at `depth="shallow"` |
@@ -196,6 +198,39 @@ Can you spot any issues?
 The token is replaced with an identifier (`CONTEXT_1`, `CONTEXT_2`, …) in the message sent to the model, and the file content is injected as a system message that persists for the rest of the session. On Windows, paths copied from Explorer (which wraps them in quotes) are handled automatically.
 
 The tool prompts for secrets review before injecting. Pass `--unsafe` on startup to skip this prompt.
+
+---
+
+## Skills
+
+Skills are reusable behaviour guides you can inject into the session on demand. Each skill is a directory containing a `SKILL.md` entry point and optional supporting `.md` files.
+
+Enable skills by pointing `skills_dir` at a directory of skill directories:
+
+```yaml
+skills_dir: /abs/path/to/skills   # each subdirectory must contain SKILL.md
+```
+
+During a session:
+
+| Command | Effect |
+|---|---|
+| `/skill` | List available skills (`*` = active) |
+| `/skill <name>` | Activate — injects `SKILL.md` as a system message and grants `read_file` access to the skill directory so the model can fetch supporting docs |
+| `/skill remove <name>` | Deactivate — removes from context and revokes `read_file` access |
+
+When a skill is active the model sees:
+
+```
+[SKILL: tdd]
+Directory: /abs/path/to/skills/tdd
+Supporting files in this directory are readable via read_file.
+---
+<SKILL.md content>
+---
+```
+
+The model can call `read_file` on sibling files (e.g. `mocking.md`, `tests.md`) if the skill content references them.
 
 ---
 

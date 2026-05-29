@@ -184,6 +184,8 @@ def _extract(arg: str, session: ChatSession) -> None:
 
 
 def _handle_skill(arg: str, session) -> None:
+    from pmca.types import ActiveSkill
+
     skills_dir = session.config.skills_dir
     if skills_dir is None:
         print("Error: skills_dir not configured.")
@@ -193,37 +195,41 @@ def _handle_skill(arg: str, session) -> None:
 
     if arg.startswith("remove "):
         name = arg[len("remove "):].strip()
-        for i, (n, _) in enumerate(session._active_skills):
-            if n == name:
+        for i, skill in enumerate(session._active_skills):
+            if skill.name == name:
                 session._active_skills.pop(i)
+                session.config.read_allowed_dirs.remove(skill.directory)
                 print(f"Skill '{name}' deactivated.")
                 return
         print(f"Skill '{name}' is not active.")
         return
 
     if not arg:
-        skill_files = sorted(skills_dir.glob("*.md"))
-        if not skill_files:
+        skill_dirs = sorted(d for d in skills_dir.iterdir() if d.is_dir() and (d / "SKILL.md").exists())
+        if not skill_dirs:
             print("No skills available.")
             return
-        active_names = {n for n, _ in session._active_skills}
+        active_names = {s.name for s in session._active_skills}
         print("Available skills (* = active):")
-        for f in skill_files:
-            marker = "*" if f.stem in active_names else " "
-            print(f"  {marker} {f.stem}")
+        for d in skill_dirs:
+            marker = "*" if d.name in active_names else " "
+            print(f"  {marker} {d.name}")
         return
 
     # Activate by name
     name = arg
-    if any(n == name for n, _ in session._active_skills):
+    if any(s.name == name for s in session._active_skills):
         print(f"Skill '{name}' is already active.")
         return
-    skill_path = skills_dir / f"{name}.md"
-    if not skill_path.exists():
+    skill_dir = skills_dir / name
+    skill_md = skill_dir / "SKILL.md"
+    if not skill_md.exists():
         print(f"Error: skill '{name}' not found in {skills_dir}.")
         return
-    content = skill_path.read_text(encoding="utf-8")
-    session._active_skills.append((name, content))
+    content = skill_md.read_text(encoding="utf-8")
+    skill = ActiveSkill(name=name, content=content, directory=skill_dir)
+    session._active_skills.append(skill)
+    session.config.read_allowed_dirs.append(skill_dir)
     print(f"Skill '{name}' activated.")
 
 

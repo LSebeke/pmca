@@ -430,15 +430,29 @@ def test_skill_no_skills_dir_prints_error(capsys):
     assert capsys.readouterr().out.strip()
 
 
+def _make_skill_dir(parent, name):
+    d = parent / name
+    d.mkdir()
+    (d / "SKILL.md").write_text(f"# {name} skill")
+    return d
+
+
 def test_skill_empty_dir_prints_no_skills_message(tmp_path, capsys):
     session = _skill_session(skills_dir=tmp_path)
     handle_command("/skill", session)
     assert "No skills available" in capsys.readouterr().out
 
 
-def test_skill_lists_available_skills(tmp_path, capsys):
+def test_skill_flat_md_file_not_listed(tmp_path, capsys):
     (tmp_path / "tdd.md").write_text("TDD content")
-    (tmp_path / "security.md").write_text("Security content")
+    session = _skill_session(skills_dir=tmp_path)
+    handle_command("/skill", session)
+    assert "No skills available" in capsys.readouterr().out
+
+
+def test_skill_lists_available_skills(tmp_path, capsys):
+    _make_skill_dir(tmp_path, "tdd")
+    _make_skill_dir(tmp_path, "security")
     session = _skill_session(skills_dir=tmp_path)
     handle_command("/skill", session)
     out = capsys.readouterr().out
@@ -446,9 +460,20 @@ def test_skill_lists_available_skills(tmp_path, capsys):
     assert "security" in out
 
 
+def test_skill_dir_without_skill_md_not_listed(tmp_path, capsys):
+    (tmp_path / "empty-skill").mkdir()
+    session = _skill_session(skills_dir=tmp_path)
+    handle_command("/skill", session)
+    assert "No skills available" in capsys.readouterr().out
+
+
 def test_skill_marks_active_skill_with_star(tmp_path, capsys):
-    (tmp_path / "tdd.md").write_text("TDD content")
-    session = _skill_session(skills_dir=tmp_path, active_skills=[("tdd", "TDD content")])
+    from pmca.types import ActiveSkill
+    skill_dir = _make_skill_dir(tmp_path, "tdd")
+    session = _skill_session(
+        skills_dir=tmp_path,
+        active_skills=[ActiveSkill(name="tdd", content="TDD content", directory=skill_dir)],
+    )
     handle_command("/skill", session)
     out = capsys.readouterr().out
     assert "*" in out
@@ -456,7 +481,7 @@ def test_skill_marks_active_skill_with_star(tmp_path, capsys):
 
 
 def test_skill_list_includes_legend(tmp_path, capsys):
-    (tmp_path / "tdd.md").write_text("TDD content")
+    _make_skill_dir(tmp_path, "tdd")
     session = _skill_session(skills_dir=tmp_path)
     handle_command("/skill", session)
     out = capsys.readouterr().out
@@ -464,7 +489,7 @@ def test_skill_list_includes_legend(tmp_path, capsys):
 
 
 def test_skill_activate_prints_confirmation(tmp_path, capsys):
-    (tmp_path / "tdd.md").write_text("TDD content")
+    _make_skill_dir(tmp_path, "tdd")
     session = _skill_session(skills_dir=tmp_path)
     handle_command("/skill tdd", session)
     out = capsys.readouterr().out
@@ -473,51 +498,102 @@ def test_skill_activate_prints_confirmation(tmp_path, capsys):
 
 
 def test_skill_activate_adds_to_active_skills(tmp_path):
-    (tmp_path / "tdd.md").write_text("TDD content")
+    from pmca.types import ActiveSkill
+    _make_skill_dir(tmp_path, "tdd")
     session = _skill_session(skills_dir=tmp_path)
     handle_command("/skill tdd", session)
-    assert any(name == "tdd" for name, _ in session._active_skills)
+    assert any(isinstance(s, ActiveSkill) and s.name == "tdd" for s in session._active_skills)
 
 
-def test_skill_activate_loads_file_content(tmp_path):
-    (tmp_path / "tdd.md").write_text("## TDD\nWrite tests first.")
+def test_skill_activate_loads_skill_md_content(tmp_path):
+    skill_dir = tmp_path / "tdd"
+    skill_dir.mkdir()
+    (skill_dir / "SKILL.md").write_text("## TDD\nWrite tests first.")
     session = _skill_session(skills_dir=tmp_path)
     handle_command("/skill tdd", session)
-    assert session._active_skills[0][1] == "## TDD\nWrite tests first."
+    assert session._active_skills[0].content == "## TDD\nWrite tests first."
+
+
+def test_skill_activate_sets_directory(tmp_path):
+    from pmca.types import ActiveSkill
+    skill_dir = _make_skill_dir(tmp_path, "tdd")
+    session = _skill_session(skills_dir=tmp_path)
+    handle_command("/skill tdd", session)
+    assert session._active_skills[0].directory == skill_dir
+
+
+def test_skill_activate_adds_dir_to_read_allowed_dirs(tmp_path):
+    skill_dir = _make_skill_dir(tmp_path, "tdd")
+    session = _skill_session(skills_dir=tmp_path)
+    session.config.read_allowed_dirs = []
+    handle_command("/skill tdd", session)
+    assert skill_dir in session.config.read_allowed_dirs
 
 
 def test_skill_activate_already_active_prints_message(tmp_path, capsys):
-    (tmp_path / "tdd.md").write_text("TDD content")
-    session = _skill_session(skills_dir=tmp_path, active_skills=[("tdd", "TDD content")])
+    from pmca.types import ActiveSkill
+    skill_dir = _make_skill_dir(tmp_path, "tdd")
+    session = _skill_session(
+        skills_dir=tmp_path,
+        active_skills=[ActiveSkill(name="tdd", content="TDD content", directory=skill_dir)],
+    )
     handle_command("/skill tdd", session)
     out = capsys.readouterr().out
     assert "already" in out.lower()
 
 
 def test_skill_activate_already_active_does_not_duplicate(tmp_path):
-    (tmp_path / "tdd.md").write_text("TDD content")
-    session = _skill_session(skills_dir=tmp_path, active_skills=[("tdd", "TDD content")])
+    from pmca.types import ActiveSkill
+    skill_dir = _make_skill_dir(tmp_path, "tdd")
+    session = _skill_session(
+        skills_dir=tmp_path,
+        active_skills=[ActiveSkill(name="tdd", content="TDD content", directory=skill_dir)],
+    )
     handle_command("/skill tdd", session)
     assert len(session._active_skills) == 1
 
 
-def test_skill_activate_file_not_found_prints_error(tmp_path, capsys):
+def test_skill_activate_not_found_prints_error(tmp_path, capsys):
     session = _skill_session(skills_dir=tmp_path)
     handle_command("/skill nonexistent", session)
     assert capsys.readouterr().out.strip()
 
 
 def test_skill_remove_deactivates_skill(tmp_path):
-    session = _skill_session(skills_dir=tmp_path, active_skills=[("tdd", "TDD content")])
+    from pmca.types import ActiveSkill
+    skill_dir = _make_skill_dir(tmp_path, "tdd")
+    session = _skill_session(
+        skills_dir=tmp_path,
+        active_skills=[ActiveSkill(name="tdd", content="TDD content", directory=skill_dir)],
+    )
+    session.config.read_allowed_dirs = [skill_dir]
     handle_command("/skill remove tdd", session)
     assert session._active_skills == []
 
 
 def test_skill_remove_prints_confirmation(tmp_path, capsys):
-    session = _skill_session(skills_dir=tmp_path, active_skills=[("tdd", "TDD content")])
+    from pmca.types import ActiveSkill
+    skill_dir = _make_skill_dir(tmp_path, "tdd")
+    session = _skill_session(
+        skills_dir=tmp_path,
+        active_skills=[ActiveSkill(name="tdd", content="TDD content", directory=skill_dir)],
+    )
+    session.config.read_allowed_dirs = [skill_dir]
     handle_command("/skill remove tdd", session)
     out = capsys.readouterr().out
     assert "tdd" in out.lower()
+
+
+def test_skill_remove_removes_dir_from_read_allowed_dirs(tmp_path):
+    from pmca.types import ActiveSkill
+    skill_dir = _make_skill_dir(tmp_path, "tdd")
+    session = _skill_session(
+        skills_dir=tmp_path,
+        active_skills=[ActiveSkill(name="tdd", content="TDD content", directory=skill_dir)],
+    )
+    session.config.read_allowed_dirs = [skill_dir]
+    handle_command("/skill remove tdd", session)
+    assert skill_dir not in session.config.read_allowed_dirs
 
 
 def test_skill_remove_not_active_prints_error(tmp_path, capsys):

@@ -20,7 +20,7 @@ pmca/
 ├── openai_client.py    # OpenAI API calls with retry logic
 ├── logger.py           # JSONL chat log + debug log writer
 ├── resume.py           # JSONL resume: parse log, validate, extract history + context
-├── types.py            # Shared dataclasses: Chunk, Attachment, ScratchpadEntry, ToolCallRequest
+├── types.py            # Shared types: Chunk, Attachment, ScratchpadEntry, ActiveSkill, ToolCallRequest
 └── rag/
     ├── chunker.py      # File → Chunk list (semantic / AST-based)
     ├── embedder.py     # Thin embed() interface over OpenAI embeddings
@@ -49,6 +49,7 @@ class Config:
     rag_medium_k: int = 7        # chunks returned for depth="medium"
     rag_deep_k: int = 15         # chunks returned for depth="deep"
     max_scratchpad_entries: int = 20  # hard cap on scratchpad entries; configurable
+    skills_dir: Path | None = None        # absolute path to skill directory; None → /skill command disabled
     test_dir: Path | None = None          # absolute path; None → run_tests tool not registered
     test_timeout: int = 60                # seconds before run_tests is killed
     max_attachment_kb: int = 500
@@ -96,7 +97,31 @@ Persists in `ChatSession._scratchpad` across turns and is injected as `[SCRATCHP
 
 ---
 
-### 3.5 ToolCallRequest
+### 3.5 ActiveSkill
+
+```python
+class ActiveSkill(NamedTuple):
+    name: str       # directory name, e.g. "tdd"
+    content: str    # verbatim content of SKILL.md
+    directory: Path # absolute path to the skill directory
+```
+
+Stored in `ChatSession._active_skills`. Injected as a system message each turn in the format:
+
+```
+[SKILL: <name>]
+Directory: <absolute path to skill directory>
+Supporting files in this directory are readable via read_file.
+---
+<SKILL.md content>
+---
+```
+
+Activating a skill appends `directory` to `config.read_allowed_dirs`; deactivating removes it.
+
+---
+
+### 3.6 ToolCallRequest
 
 ```python
 @dataclass
@@ -110,7 +135,7 @@ Returned by `chat_completion()` when the model issues a tool call instead of a t
 
 ---
 
-### 3.6 LogEntry (JSONL)
+### 3.7 LogEntry (JSONL)
 
 Three entry types, distinguished by a mandatory `type` field:
 
@@ -315,6 +340,7 @@ class ChatSession:
     _turn_seen_chunks: set[tuple[Path, str]]  # (source_file, label) pairs already returned this turn; reset at start of each process()
     _turn_read_files: set[Path]  # resolved paths read via read_file this turn; reset at start of each process(); gates edit_file and write_file on existing files
     _scratchpad: list[ScratchpadEntry]  # entries the LLM has saved from tool call returns; injected as [SCRATCHPAD_i] system messages each turn
+    _active_skills: list[ActiveSkill]   # skills activated via /skill; injected as [SKILL: name] system messages each turn
 
     def process(self, user_input: str) -> str:
         """
@@ -787,6 +813,13 @@ Order sent to OpenAI on each turn:
           ---
           [CONTEXT_2] ...
 
+[system]  [SKILL: tdd]              ← one entry per active skill (if any)
+          Directory: /abs/path/to/skills/tdd
+          Supporting files in this directory are readable via read_file.
+          ---
+          <SKILL.md content>
+          ---
+
 [system]  [SCRATCHPAD_1]            ← ALL _scratchpad entries saved by the LLM (if any)
           Title: read_file: src/pmca/config.py — load_config body
           ---
@@ -800,7 +833,7 @@ Order sent to OpenAI on each turn:
 [user]    <current message>
 ```
 
-All `session_attachments` are injected on every turn. `_scratchpad` entries are injected as `[SCRATCHPAD_i]` system messages after attachments, before history — only when the list is non-empty. The tag distinguishes saved context ("the LLM chose to keep this from a tool call return") from transient tool results. Because tool call returns are not stored in `history`, the scratchpad is the only mechanism for the LLM to preserve information it finds across turns. RAG chunks are retrieved on demand via the `query_knowledge_base` tool and appear inline as tool result messages; the LLM can save relevant excerpts to the scratchpad if they are load-bearing. Only user/assistant exchanges are stored in history. There is no special `[RESUMED_CONTEXT]` block — resumed sessions use the same assembly path as live sessions.
+All `session_attachments` are injected on every turn. Active skills are injected as `[SKILL: name]` system messages after attachments — one per active skill, only when `_active_skills` is non-empty. `_scratchpad` entries are injected as `[SCRATCHPAD_i]` system messages after skills, before history — only when the list is non-empty. The tag distinguishes saved context ("the LLM chose to keep this from a tool call return") from transient tool results. Because tool call returns are not stored in `history`, the scratchpad is the only mechanism for the LLM to preserve information it finds across turns. RAG chunks are retrieved on demand via the `query_knowledge_base` tool and appear inline as tool result messages; the LLM can save relevant excerpts to the scratchpad if they are load-bearing. Only user/assistant exchanges are stored in history. There is no special `[RESUMED_CONTEXT]` block — resumed sessions use the same assembly path as live sessions.
 
 ---
 
@@ -873,6 +906,9 @@ History trimming is lazy: the first `session.process()` call runs `_trim_history
 | `/set test_timeout=N` | Set test run timeout (seconds) for this session |
 | `/extract <path>` | Extract code blocks from the last response into `<path>`; fence language inferred from extension (`.py`, `.yaml`/`.yml`, `.json`, `.toml`, `.sh`) |
 | `/scratchpad` | Print all scratchpad entries (title + content); prints "Scratchpad is empty." if none exist |
+| `/skill` | List available skills (`*` = active); requires `skills_dir` configured |
+| `/skill <name>` | Activate a skill: reads `<skills_dir>/<name>/SKILL.md`, injects as system message, grants `read_file` access to that skill directory |
+| `/skill remove <name>` | Deactivate a skill: removes from context and revokes `read_file` access |
 | `/clear` | Clear conversation history, session_attachments, and _scratchpad; rotate to a new log file (writes fresh system_prompt + startup_doc entries); print new log path |
 | `/help` | Print command reference and key bindings |
 | `/exit` | End session (also: Ctrl+C) |

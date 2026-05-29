@@ -22,7 +22,7 @@ from pmca.tools import (
     execute_write_file,
     get_tools,
 )
-from pmca.types import Attachment, ScratchpadEntry, ToolCallRequest
+from pmca.types import ActiveSkill, Attachment, ScratchpadEntry, ToolCallRequest
 
 
 class ChatSession:
@@ -175,8 +175,8 @@ class ChatSession:
         for att in self.session_attachments:
             messages.append({"role": "system", "content": _format_attachment(att)})
 
-        for name, content in self._active_skills:
-            messages.append({"role": "system", "content": _format_skill(name, content)})
+        for skill in self._active_skills:
+            messages.append({"role": "system", "content": _format_skill(skill)})
 
         for i, entry in enumerate(self._scratchpad, start=1):
             messages.append({"role": "system", "content": _format_scratchpad_entry(i, entry)})
@@ -196,8 +196,13 @@ def _format_attachment(att: Attachment) -> str:
     return f"[{att.identifier}]\nFile: {att.path}\nType: {suffix}\n---\n{att.content}\n---"
 
 
-def _format_skill(name: str, content: str) -> str:
-    return f"[SKILL: {name}]\n---\n{content}\n---"
+def _format_skill(skill: ActiveSkill) -> str:
+    return (
+        f"[SKILL: {skill.name}]\n"
+        f"Directory: {skill.directory}\n"
+        f"Supporting files in this directory are readable via read_file.\n"
+        f"---\n{skill.content}\n---"
+    )
 
 
 def _format_scratchpad_entry(i: int, entry: "ScratchpadEntry") -> str:

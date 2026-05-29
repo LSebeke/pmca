@@ -5,7 +5,7 @@ import pytest
 
 from pmca.chat import ChatSession, _build_system_context
 from pmca.config import Config
-from pmca.types import Attachment, Chunk
+from pmca.types import ActiveSkill, Attachment, Chunk
 
 
 # ---------------------------------------------------------------------------
@@ -932,7 +932,7 @@ def test_active_skills_starts_empty():
 
 def test_active_skills_injected_as_system_messages():
     session, _, _ = _make_session()
-    session._active_skills = [("tdd", "## TDD\nWrite tests first.")]
+    session._active_skills = [ActiveSkill(name="tdd", content="## TDD\nWrite tests first.", directory=Path("/skills/tdd"))]
 
     with patch("pmca.chat.chat_completion", return_value="r") as mock_cc:
         with patch("pmca.chat.parse_attachment_paths", return_value=[]):
@@ -943,11 +943,37 @@ def test_active_skills_injected_as_system_messages():
     assert len(skill_msgs) == 1
 
 
+def test_active_skill_format_includes_directory():
+    from pmca.chat import _format_skill
+    skill = ActiveSkill(name="tdd", content="## TDD", directory=Path("/skills/tdd"))
+    result = _format_skill(skill)
+    assert "Directory: /skills/tdd" in result
+
+
+def test_active_skill_format_mentions_read_file():
+    from pmca.chat import _format_skill
+    skill = ActiveSkill(name="tdd", content="## TDD", directory=Path("/skills/tdd"))
+    result = _format_skill(skill)
+    assert "read_file" in result
+
+
 def test_active_skills_survive_rotate_logger():
     session, _, _ = _make_session()
-    session._active_skills = [("tdd", "## TDD")]
+    skill = ActiveSkill(name="tdd", content="## TDD", directory=Path("/skills/tdd"))
+    session._active_skills = [skill]
     with patch("pmca.chat.SessionLogger"):
         with patch("pmca.chat.datetime") as mock_dt:
             mock_dt.now.return_value.strftime.return_value = "2026-05-27_10-00-00"
             session.rotate_logger()
-    assert session._active_skills == [("tdd", "## TDD")]
+    assert session._active_skills == [skill]
+
+
+# ---------------------------------------------------------------------------
+# ActiveSkill
+# ---------------------------------------------------------------------------
+
+def test_active_skill_has_name_content_directory():
+    skill = ActiveSkill(name="tdd", content="## TDD", directory=Path("/skills/tdd"))
+    assert skill.name == "tdd"
+    assert skill.content == "## TDD"
+    assert skill.directory == Path("/skills/tdd")

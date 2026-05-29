@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import NamedTuple
 
 
 @dataclass
@@ -23,6 +24,12 @@ class Attachment:
 class ScratchpadEntry:
     title: str    # short label making the origin of the information clear
     content: str  # arbitrary excerpt from a tool call return
+
+
+class ActiveSkill(NamedTuple):
+    name: str
+    content: str
+    directory: Path
 
 
 @dataclass
