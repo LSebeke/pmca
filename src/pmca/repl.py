@@ -17,6 +17,9 @@ Commands:
   /read remove <path>         Remove a directory from read_allowed_dirs for this session
   /extract <path>             Extract code blocks from last response into <path> (type inferred from extension)
   /scratchpad                 Show all scratchpad entries
+  /skill                      List available skills (* = active)
+  /skill <name>               Activate a skill
+  /skill remove <name>        Deactivate a skill
   /clear                      Clear conversation history
   /help                       Print this help message
   /exit                       End session
@@ -100,6 +103,10 @@ def handle_command(cmd: str, session: ChatSession) -> None:
                 print(_format_scratchpad_entry(i, entry))
         return
 
+    if name == "/skill":
+        _handle_skill(parts[1] if len(parts) > 1 else "", session)
+        return
+
     print(f"Unknown command: {name}")
 
 
@@ -174,6 +181,50 @@ def _extract(arg: str, session: ChatSession) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("\n\n".join(b.rstrip("\n") for b in blocks))
     print(f"Wrote {len(blocks)} block(s) to {arg}")
+
+
+def _handle_skill(arg: str, session) -> None:
+    skills_dir = session.config.skills_dir
+    if skills_dir is None:
+        print("Error: skills_dir not configured.")
+        return
+
+    arg = arg.strip()
+
+    if arg.startswith("remove "):
+        name = arg[len("remove "):].strip()
+        for i, (n, _) in enumerate(session._active_skills):
+            if n == name:
+                session._active_skills.pop(i)
+                print(f"Skill '{name}' deactivated.")
+                return
+        print(f"Skill '{name}' is not active.")
+        return
+
+    if not arg:
+        skill_files = sorted(skills_dir.glob("*.md"))
+        if not skill_files:
+            print("No skills available.")
+            return
+        active_names = {n for n, _ in session._active_skills}
+        print("Available skills (* = active):")
+        for f in skill_files:
+            marker = "*" if f.stem in active_names else " "
+            print(f"  {marker} {f.stem}")
+        return
+
+    # Activate by name
+    name = arg
+    if any(n == name for n, _ in session._active_skills):
+        print(f"Skill '{name}' is already active.")
+        return
+    skill_path = skills_dir / f"{name}.md"
+    if not skill_path.exists():
+        print(f"Error: skill '{name}' not found in {skills_dir}.")
+        return
+    content = skill_path.read_text(encoding="utf-8")
+    session._active_skills.append((name, content))
+    print(f"Skill '{name}' activated.")
 
 
 def _handle_read(arg: str, session) -> None:

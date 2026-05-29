@@ -919,3 +919,35 @@ def test_rotate_logger_resets_scratchpad():
             mock_dt.now.return_value.strftime.return_value = "2026-05-27_10-00-00"
             session.rotate_logger()
     assert session._scratchpad == []
+
+
+# ---------------------------------------------------------------------------
+# Active skills
+# ---------------------------------------------------------------------------
+
+def test_active_skills_starts_empty():
+    session, _, _ = _make_session()
+    assert session._active_skills == []
+
+
+def test_active_skills_injected_as_system_messages():
+    session, _, _ = _make_session()
+    session._active_skills = [("tdd", "## TDD\nWrite tests first.")]
+
+    with patch("pmca.chat.chat_completion", return_value="r") as mock_cc:
+        with patch("pmca.chat.parse_attachment_paths", return_value=[]):
+            session.process("hi")
+
+    messages = mock_cc.call_args[0][0]
+    skill_msgs = [m for m in messages if m.get("role") == "system" and "Write tests first." in m.get("content", "")]
+    assert len(skill_msgs) == 1
+
+
+def test_active_skills_survive_rotate_logger():
+    session, _, _ = _make_session()
+    session._active_skills = [("tdd", "## TDD")]
+    with patch("pmca.chat.SessionLogger"):
+        with patch("pmca.chat.datetime") as mock_dt:
+            mock_dt.now.return_value.strftime.return_value = "2026-05-27_10-00-00"
+            session.rotate_logger()
+    assert session._active_skills == [("tdd", "## TDD")]

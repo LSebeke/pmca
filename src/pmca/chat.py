@@ -46,6 +46,7 @@ class ChatSession:
         self._turn_seen_chunks: set[tuple] = set()
         self._turn_read_files: set[Path] = set()
         self._scratchpad: list[ScratchpadEntry] = []
+        self._active_skills: list[tuple[str, str]] = []
         self._system_context: str | None = _build_system_context(config.system_context_fields)
 
     def process(self, user_input: str) -> tuple[str | None, int]:
@@ -174,6 +175,9 @@ class ChatSession:
         for att in self.session_attachments:
             messages.append({"role": "system", "content": _format_attachment(att)})
 
+        for name, content in self._active_skills:
+            messages.append({"role": "system", "content": _format_skill(name, content)})
+
         for i, entry in enumerate(self._scratchpad, start=1):
             messages.append({"role": "system", "content": _format_scratchpad_entry(i, entry)})
 
@@ -190,6 +194,10 @@ def _format_startup_doc(path: Path, content: str) -> str:
 def _format_attachment(att: Attachment) -> str:
     suffix = att.path.suffix.lstrip(".")
     return f"[{att.identifier}]\nFile: {att.path}\nType: {suffix}\n---\n{att.content}\n---"
+
+
+def _format_skill(name: str, content: str) -> str:
+    return f"[SKILL: {name}]\n---\n{content}\n---"
 
 
 def _format_scratchpad_entry(i: int, entry: "ScratchpadEntry") -> str:

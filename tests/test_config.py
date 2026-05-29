@@ -433,6 +433,48 @@ def test_unknown_yaml_keys_are_ignored(tmp_path):
 # test_dir and test_timeout
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# skills_dir
+# ---------------------------------------------------------------------------
+
+def test_skills_dir_defaults_to_none(tmp_path):
+    rag_file = tmp_path / "code.py"
+    rag_file.write_text("x = 1")
+    cfg_path = write_yaml(tmp_path, "c.yaml", minimal_yaml(rag_file, tmp_path / "logs"))
+    cfg = load_config(str(cfg_path))
+    assert cfg.skills_dir is None
+
+
+def test_skills_dir_parsed_from_yaml(tmp_path):
+    rag_file = tmp_path / "code.py"
+    rag_file.write_text("x = 1")
+    skills = tmp_path / "skills"
+    skills.mkdir()
+    yaml_content = minimal_yaml(rag_file, tmp_path / "logs") + f"skills_dir: {skills}\n"
+    cfg_path = write_yaml(tmp_path, "c.yaml", yaml_content)
+    cfg = load_config(str(cfg_path))
+    assert cfg.skills_dir == skills
+
+
+def test_skills_dir_raises_when_not_absolute(tmp_path):
+    rag_file = tmp_path / "code.py"
+    rag_file.write_text("x = 1")
+    yaml_content = minimal_yaml(rag_file, tmp_path / "logs") + "skills_dir: relative/skills\n"
+    cfg_path = write_yaml(tmp_path, "c.yaml", yaml_content)
+    with pytest.raises(ConfigError, match="absolute"):
+        load_config(str(cfg_path))
+
+
+def test_skills_dir_raises_when_does_not_exist(tmp_path):
+    rag_file = tmp_path / "code.py"
+    rag_file.write_text("x = 1")
+    missing = tmp_path / "no_such_skills"
+    yaml_content = minimal_yaml(rag_file, tmp_path / "logs") + f"skills_dir: {missing}\n"
+    cfg_path = write_yaml(tmp_path, "c.yaml", yaml_content)
+    with pytest.raises(ConfigError, match="not found|does not exist"):
+        load_config(str(cfg_path))
+
+
 def test_test_dir_defaults_to_none(tmp_path):
     rag_file = tmp_path / "code.py"
     rag_file.write_text("x = 1")
