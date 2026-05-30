@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import json
 import time
 
@@ -17,6 +18,10 @@ class APIError(Exception):
 
 
 class APITransientError(Exception):
+    pass
+
+
+class MalformedToolCallError(Exception):
     pass
 
 
@@ -45,7 +50,7 @@ def chat_completion(
                 return ToolCallRequest(
                     tool_call_id=tc.id,
                     name=tc.function.name,
-                    arguments=json.loads(tc.function.arguments),
+                    arguments=_parse_tool_arguments(tc.function.arguments),
                 )
             return msg.content
         except (openai.RateLimitError, openai.APIConnectionError) as exc:
@@ -61,6 +66,17 @@ def chat_completion(
             time.sleep(_BACKOFF[attempt])
 
     raise APITransientError(str(last_exc)) from last_exc
+
+
+def _parse_tool_arguments(raw: str) -> dict:
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        pass
+    try:
+        return ast.literal_eval(raw)
+    except (ValueError, SyntaxError) as exc:
+        raise MalformedToolCallError(f"Cannot parse tool arguments: {raw!r}") from exc
 
 
 def _is_transient(exc: openai.OpenAIError) -> bool:

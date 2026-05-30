@@ -430,6 +430,20 @@ def chat_completion(
 Transient errors: `RateLimitError`, `APIConnectionError`, `APIStatusError` with status >= 500.
 Permanent errors: `AuthenticationError`, `BadRequestError`, other `APIStatusError`.
 
+```python
+class MalformedToolCallError(Exception):
+    """Raised when tool call arguments cannot be parsed by either json.loads or ast.literal_eval."""
+
+def _parse_tool_arguments(raw: str) -> dict:
+    """
+    Parse the raw argument string from a tool call response.
+    First tries json.loads (standard JSON); on failure falls back to
+    ast.literal_eval (handles single-quoted Python dicts that some models emit).
+    Raises MalformedToolCallError with the raw string embedded in the message
+    if both parsers fail (e.g. unquoted keys, trailing commas).
+    """
+```
+
 ---
 
 ### 4.8 `tools.py`
@@ -1012,6 +1026,7 @@ Key bindings:
 | Attachment file not found | Print `file not found: <path>`; message not sent; user can recall via ↑ |
 | Attachment size exceeds `max_attachment_kb` | Print warning; continue to security prompt |
 | User rejects security prompt | Print notice; message not sent; user can recall via ↑ |
+| Malformed tool call arguments (unparseable JSON) | `MalformedToolCallError` raised; message propagates up to REPL error handler; session continues |
 | Transient API error (chat) | Retry 3× with backoff (1s/2s/4s); print `[retrying... attempt N/3]` |
 | Permanent API error (chat) | Print error to chat; log to debug log; session continues |
 | History trimmed | Print `[N earlier turn(s) omitted from context]` in chat UI |
@@ -1086,7 +1101,7 @@ This regenerates `pixi.lock` with `win-64` package resolutions if not already pr
 | `pyyaml` | YAML config parsing |
 | `prompt_toolkit` | REPL input, history, key bindings |
 | `pickle` (stdlib) | Embedding disk cache serialisation |
-| `ast` (stdlib) | Python file chunking |
+| `ast` (stdlib) | Python file chunking; `ast.literal_eval` fallback for single-quoted tool call arguments |
 | `hashlib` (stdlib) | SHA-256 for cache keys and file invalidation |
 | `pathlib` (stdlib) | All path handling |
 | `argparse` (stdlib) | CLI argument parsing |

@@ -7,7 +7,7 @@ import openai
 import pytest
 
 from pmca.config import Config
-from pmca.openai_client import APIError, APITransientError, chat_completion
+from pmca.openai_client import APIError, APITransientError, MalformedToolCallError, chat_completion
 from pmca.types import ToolCallRequest
 
 # ---------------------------------------------------------------------------
@@ -256,3 +256,41 @@ def test_tools_none_does_not_pass_tools_kwarg():
     kwargs = mock_create.call_args.kwargs
     assert "tools" not in kwargs
     assert "parallel_tool_calls" not in kwargs
+
+
+# ---------------------------------------------------------------------------
+# Phase 2 — JSON repair
+# ---------------------------------------------------------------------------
+
+def test_single_quoted_args_parsed_via_ast_fallback():
+    """Model returns single-quoted Python dict; json.loads fails but ast.literal_eval recovers."""
+    single_quoted = "{'path': '/tmp/f.py', 'content': 'x', 'description': 'test'}"
+    with patch("pmca.openai_client.openai.OpenAI") as MockClient:
+        MockClient.return_value.chat.completions.create.return_value = _mock_tool_call_response(
+            args_json=single_quoted
+        )
+        result = chat_completion([], _config(), tools=[])
+
+    assert isinstance(result, ToolCallRequest)
+    assert result.arguments["path"] == "/tmp/f.py"
+
+
+def test_unparseable_args_raise_malformed_tool_call_error():
+    """Both json.loads and ast.literal_eval fail → MalformedToolCallError (not JSONDecodeError)."""
+    garbage = "{path: /tmp/f.py, content: x}"  # unquoted keys, invalid for both parsers
+    with patch("pmca.openai_client.openai.OpenAI") as MockClient:
+        MockClient.return_value.chat.completions.create.return_value = _mock_tool_call_response(
+            args_json=garbage
+        )
+        with pytest.raises(MalformedToolCallError):
+            chat_completion([], _config(), tools=[])
+
+
+def test_malformed_tool_call_error_includes_raw_string():
+    garbage = "{path: /tmp/f.py}"
+    with patch("pmca.openai_client.openai.OpenAI") as MockClient:
+        MockClient.return_value.chat.completions.create.return_value = _mock_tool_call_response(
+            args_json=garbage
+        )
+        with pytest.raises(MalformedToolCallError, match=r"\{path: /tmp/f\.py\}"):
+            chat_completion([], _config(), tools=[])

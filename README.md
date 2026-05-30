@@ -15,6 +15,7 @@ A terminal chat tool that wraps the OpenAI API with project-aware context. Point
 - **Persistent scratchpad** — the model saves key excerpts from tool call returns across turns, so it doesn't lose what it read earlier in the session
 - **Session resume** — pick up any previous session exactly where you left off
 - **Tool progress output** — each tool call prints a one-line status before it executes (e.g. `[tool: edit_file /src/pmca/chat.py]`), so you can follow long chains without guessing what the model is doing
+- **Resilient tool call parsing** — tool call arguments are parsed with `json.loads` first, with an `ast.literal_eval` fallback for single-quoted Python dicts that some models emit; unparseable arguments raise `MalformedToolCallError` rather than a bare `JSONDecodeError`
 
 ### Safety
 
