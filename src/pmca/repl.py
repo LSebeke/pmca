@@ -13,6 +13,10 @@ _HELP = """\
 Commands:
   /set history_token_budget=N      Set history token budget for this session
   /set test_timeout=N              Set test run timeout in seconds for this session
+  /set max_attachment_kb=N         Set max attachment size in KB for this session
+  /set model=NAME                  Set the model for this session
+  /set temperature=F|none          Set sampling temperature (0.0–2.0) or clear it
+  /set max_tokens=N|none           Set max response tokens or clear the limit
   /set auto_approve_writes=true|false      Skip write approval prompts for this session
   /set show_diff_on_auto_approve=true|false Show unified diff even when auto-approving writes
   /read add <path>            Add a directory to read_allowed_dirs for this session
@@ -36,6 +40,9 @@ _SETTABLE = {
 }
 
 _CONFIG_BOOL_SETTABLE = {"auto_approve_writes", "show_diff_on_auto_approve"}
+_CONFIG_STR_SETTABLE = {"model"}
+_CONFIG_NULLABLE_FLOAT_SETTABLE = {"temperature"}
+_CONFIG_NULLABLE_INT_SETTABLE = {"max_tokens"}
 
 
 def run_repl(session: ChatSession) -> None:
@@ -123,7 +130,52 @@ def _handle_set(arg: str, session: ChatSession) -> None:
     key = key.strip()
     attr = _SETTABLE.get(key)
 
-    _CONFIG_SETTABLE = {"test_timeout"}
+    _CONFIG_SETTABLE = {"test_timeout", "max_attachment_kb"}
+
+    if key in _CONFIG_STR_SETTABLE:
+        value = raw_value.strip()
+        if not value:
+            print(f"Error: value for '{key}' must be a non-empty string")
+            return
+        setattr(session.config, key, value)
+        print(f"{key} = {value}")
+        return
+
+    if key in _CONFIG_NULLABLE_FLOAT_SETTABLE:
+        normalized = raw_value.strip().lower()
+        if normalized == "none":
+            setattr(session.config, key, None)
+            print(f"{key} = None")
+            return
+        try:
+            value = float(normalized)
+        except ValueError:
+            print(f"Error: value for '{key}' must be a number or 'none', got: {raw_value.strip()!r}")
+            return
+        if not (0.0 <= value <= 2.0):
+            print(f"Error: '{key}' must be between 0.0 and 2.0, got {value}")
+            return
+        setattr(session.config, key, value)
+        print(f"{key} = {value}")
+        return
+
+    if key in _CONFIG_NULLABLE_INT_SETTABLE:
+        normalized = raw_value.strip().lower()
+        if normalized == "none":
+            setattr(session.config, key, None)
+            print(f"{key} = None")
+            return
+        try:
+            value = int(normalized)
+        except ValueError:
+            print(f"Error: value for '{key}' must be a positive integer or 'none', got: {raw_value.strip()!r}")
+            return
+        if value <= 0:
+            print(f"Error: '{key}' must be a positive integer, got {value}")
+            return
+        setattr(session.config, key, value)
+        print(f"{key} = {value}")
+        return
 
     if key in _CONFIG_BOOL_SETTABLE:
         normalized = raw_value.strip().lower()
@@ -136,7 +188,7 @@ def _handle_set(arg: str, session: ChatSession) -> None:
         return
 
     if attr is None and key not in _CONFIG_SETTABLE:
-        valid = ", ".join(list(_SETTABLE) + sorted(_CONFIG_BOOL_SETTABLE) + sorted(_CONFIG_SETTABLE))
+        valid = ", ".join(list(_SETTABLE) + sorted(_CONFIG_STR_SETTABLE) + sorted(_CONFIG_NULLABLE_FLOAT_SETTABLE) + sorted(_CONFIG_NULLABLE_INT_SETTABLE) + sorted(_CONFIG_BOOL_SETTABLE) + sorted(_CONFIG_SETTABLE))
         print(f"Error: unknown parameter '{key}'. Valid: {valid}")
         return
 

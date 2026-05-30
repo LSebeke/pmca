@@ -857,7 +857,7 @@ def run_repl(session: ChatSession) -> None:
 
 def handle_command(cmd: str, session: ChatSession) -> None:
     """
-    /set <param>=<value>  — update session.history_token_budget, session.config.test_timeout, or session.config.auto_approve_writes (true/false)
+    /set <param>=<value>  — update session.history_token_budget, session.config.test_timeout, session.config.max_attachment_kb (positive int); session.config.model (non-empty string); session.config.temperature (float 0.0–2.0 or "none"), session.config.max_tokens (positive int or "none"); session.config.auto_approve_writes / show_diff_on_auto_approve (true/false)
     /extract <path>       — write code blocks from last response to <path> (fence language inferred from extension)
     /scratchpad           — print all scratchpad entries (title + content for each); print
                             "Scratchpad is empty." when none exist
@@ -1025,6 +1025,10 @@ History trimming is lazy: the first `session.process()` call runs `_trim_history
 | `/read remove <path>` | Remove a directory from `read_allowed_dirs` for this session (requires user approval) |
 | `/set history_token_budget=N` | Set history token budget for this session |
 | `/set test_timeout=N` | Set test run timeout (seconds) for this session |
+| `/set max_attachment_kb=N` | Set max attachment size in KB for this session |
+| `/set model=NAME` | Switch the model for this session |
+| `/set temperature=F\|none` | Set sampling temperature (0.0–2.0), or `none` to clear |
+| `/set max_tokens=N\|none` | Set max response tokens, or `none` to clear the limit |
 | `/set auto_approve_writes=true\|false` | Skip (or restore) per-op write approval prompts for this session; directory guard still applies |
 | `/set show_diff_on_auto_approve=true\|false` | Print unified diff even when auto-approving writes; write still proceeds without a keypress |
 | `/extract <path>` | Extract code blocks from the last response into `<path>`; fence language inferred from extension (`.py`, `.yaml`/`.yml`, `.json`, `.toml`, `.sh`) |

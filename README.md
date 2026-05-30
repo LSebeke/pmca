@@ -255,6 +255,10 @@ The model can call `read_file` on sibling files (e.g. `mocking.md`, `tests.md`) 
 |---|---|
 | `/set history_token_budget=N` | Set history token budget for this session |
 | `/set test_timeout=N` | Set test run timeout in seconds for this session |
+| `/set max_attachment_kb=N` | Set max attachment size in KB for this session |
+| `/set model=NAME` | Switch the model for this session |
+| `/set temperature=F\|none` | Set sampling temperature (0.0–2.0), or `none` to clear |
+| `/set max_tokens=N\|none` | Set max response tokens, or `none` to clear the limit |
 | `/set auto_approve_writes=true\|false` | Skip (or restore) per-op write approval prompts for this session |
 | `/set show_diff_on_auto_approve=true\|false` | Show unified diff even when auto-approving writes (write still proceeds without a keypress) |
 | `/read add <path>` | Add a directory to `read_allowed_dirs` for this session (requires approval) |

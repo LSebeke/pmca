@@ -656,3 +656,134 @@ def test_set_show_diff_on_auto_approve_false():
     session.config.show_diff_on_auto_approve = True
     handle_command("/set show_diff_on_auto_approve=false", session)
     assert session.config.show_diff_on_auto_approve is False
+
+
+# ---------------------------------------------------------------------------
+# handle_command — /set model
+# ---------------------------------------------------------------------------
+
+def test_set_model_updates_config():
+    session = _session()
+    session.config = MagicMock()
+    session.config.model = "gpt-4o"
+    handle_command("/set model=gpt-4o-mini", session)
+    assert session.config.model == "gpt-4o-mini"
+
+
+def test_set_model_empty_prints_error_and_leaves_unchanged(capsys):
+    session = _session()
+    session.config = MagicMock()
+    session.config.model = "gpt-4o"
+    handle_command("/set model=", session)
+    assert capsys.readouterr().out.strip()
+    assert session.config.model == "gpt-4o"
+
+
+# ---------------------------------------------------------------------------
+# handle_command — /set temperature
+# ---------------------------------------------------------------------------
+
+def test_set_temperature_updates_config():
+    session = _session()
+    session.config = MagicMock()
+    session.config.temperature = None
+    handle_command("/set temperature=0.7", session)
+    assert session.config.temperature == pytest.approx(0.7)
+
+
+def test_set_temperature_none_clears_to_none():
+    session = _session()
+    session.config = MagicMock()
+    session.config.temperature = 0.7
+    handle_command("/set temperature=none", session)
+    assert session.config.temperature is None
+
+
+def test_set_temperature_out_of_range_prints_error_and_leaves_unchanged(capsys):
+    session = _session()
+    session.config = MagicMock()
+    session.config.temperature = 1.0
+    handle_command("/set temperature=2.5", session)
+    assert capsys.readouterr().out.strip()
+    assert session.config.temperature == 1.0
+
+
+def test_set_temperature_non_numeric_prints_error(capsys):
+    session = _session()
+    session.config = MagicMock()
+    handle_command("/set temperature=hot", session)
+    assert capsys.readouterr().out.strip()
+
+
+# ---------------------------------------------------------------------------
+# handle_command — /set max_tokens
+# ---------------------------------------------------------------------------
+
+def test_set_max_tokens_updates_config():
+    session = _session()
+    session.config = MagicMock()
+    session.config.max_tokens = None
+    handle_command("/set max_tokens=1000", session)
+    assert session.config.max_tokens == 1000
+
+
+def test_set_max_tokens_none_clears_to_none():
+    session = _session()
+    session.config = MagicMock()
+    session.config.max_tokens = 1000
+    handle_command("/set max_tokens=none", session)
+    assert session.config.max_tokens is None
+
+
+def test_set_max_tokens_zero_prints_error_and_leaves_unchanged(capsys):
+    session = _session()
+    session.config = MagicMock()
+    session.config.max_tokens = 1000
+    handle_command("/set max_tokens=0", session)
+    assert capsys.readouterr().out.strip()
+    assert session.config.max_tokens == 1000
+
+
+# ---------------------------------------------------------------------------
+# handle_command — /set max_attachment_kb
+# ---------------------------------------------------------------------------
+
+def test_set_max_attachment_kb_updates_config():
+    session = _session()
+    session.config = MagicMock()
+    session.config.max_attachment_kb = 500
+    handle_command("/set max_attachment_kb=200", session)
+    assert session.config.max_attachment_kb == 200
+
+
+def test_set_max_attachment_kb_zero_prints_error_and_leaves_unchanged(capsys):
+    session = _session()
+    session.config = MagicMock()
+    session.config.max_attachment_kb = 500
+    handle_command("/set max_attachment_kb=0", session)
+    assert capsys.readouterr().out.strip()
+    assert session.config.max_attachment_kb == 500
+
+
+# ---------------------------------------------------------------------------
+# /help mentions new settable params
+# ---------------------------------------------------------------------------
+
+def test_help_mentions_model(capsys):
+    handle_command("/help", _session())
+    assert "model" in capsys.readouterr().out
+
+
+def test_help_mentions_temperature(capsys):
+    handle_command("/help", _session())
+    assert "temperature" in capsys.readouterr().out
+
+
+def test_help_mentions_max_tokens(capsys):
+    handle_command("/help", _session())
+    assert "max_tokens" in capsys.readouterr().out
+
+
+def test_help_mentions_max_attachment_kb(capsys):
+    handle_command("/help", _session())
+    assert "max_attachment_kb" in capsys.readouterr().out
