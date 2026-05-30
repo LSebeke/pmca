@@ -59,6 +59,7 @@ class ChatSession:
         self._scratchpad: list[ScratchpadEntry] = []
         self._active_skills: list[tuple[str, str]] = []
         self._system_context: str | None = _build_system_context(config.system_context_fields)
+        logger.log_debug(f"session started: name={config.name}, model={config.model}")
 
     def process(self, user_input: str) -> tuple[str | None, int]:
         # 1. Reset per-turn state
@@ -81,17 +82,24 @@ class ChatSession:
         self.session_attachments.extend(attachments)
         message = substitute_identifiers(user_input, attachments)
 
+        for a in attachments:
+            self.logger.log_debug(f"attachment resolved: {a.path}")
+
         # 3. Trim history
         turns_dropped = self._trim_history()
+        if turns_dropped > 0:
+            self.logger.log_debug(f"history trimmed: {turns_dropped} turn(s) dropped")
 
         # 4. Assemble and call (with tool loop)
         messages = self._build_messages(message, attachments)
         tools = get_tools(self.config, self.store)
-        response = chat_completion(messages, self.config, tools=tools)
+        response = chat_completion(messages, self.config, tools=tools, logger=self.logger)
 
         while isinstance(response, ToolCallRequest):
             print(_tool_progress(response.name, response.arguments))
             approved, result = self._dispatch_tool(response)
+            print(_tool_progress(response.name, response.arguments) + f" → {_tool_result_summary(response.name, result, approved)}")
+            self.logger.log_debug(f"tool dispatch: {response.name} → {result[:200]}")
             self.logger.log_tool_call(
                 tool_call_id=response.tool_call_id,
                 name=response.name,
@@ -113,7 +121,7 @@ class ChatSession:
                 "tool_call_id": response.tool_call_id,
                 "content": result,
             })
-            response = chat_completion(messages, self.config, tools=tools)
+            response = chat_completion(messages, self.config, tools=tools, logger=self.logger)
 
         # 5. Update history and log
         self.history.append({"role": "user", "content": message})
@@ -252,6 +260,20 @@ _TOOL_KEY_ARG: dict[str, str] = {
     "git_diff": "ref", "git_log": "ref", "git_blame": "path",
     "git_show_file": "path",
 }
+
+
+def _tool_result_summary(name: str, result: str, approved: bool) -> str:
+    if not approved:
+        return "denied"
+    if result.startswith("Error"):
+        return "error"
+    if name == "read_file":
+        return f"{result.count(chr(10))} lines"
+    if name == "run_tests":
+        if "FAILED" in result or "ERROR" in result:
+            return "FAILED"
+        return "passed"
+    return "ok"
 
 
 def _tool_progress(name: str, args: dict) -> str:

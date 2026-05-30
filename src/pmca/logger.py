@@ -77,6 +77,15 @@ class SessionLogger:
         self._jsonl.write(json.dumps(entry) + "\n")
         self._jsonl.flush()
 
+    def log_api_call(self, model: str, duration: float) -> None:
+        self._log.write(f"[{_utcnow()}] chat_completion: {duration:.1f}s, model={model}\n")
+        self._log.flush()
+
+    def log_api_payload(self, messages: list[dict], response_text: str) -> None:
+        entry = json.dumps({"messages": messages, "response": response_text})
+        self._log.write(f"[{_utcnow()}] api_payload: {entry}\n")
+        self._log.flush()
+
     def log_debug(self, message: str) -> None:
         self._log.write(f"[{_utcnow()}] {message}\n")
         self._log.flush()

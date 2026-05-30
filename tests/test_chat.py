@@ -983,6 +983,63 @@ def test_active_skill_has_name_content_directory():
 # Phase 1 — Tool progress output
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Phase 4d — log_debug wiring
+# ---------------------------------------------------------------------------
+
+def test_session_logs_debug_on_init():
+    _, _, logger = _make_session()
+    logger.log_debug.assert_called()
+
+
+def test_process_logs_debug_tool_dispatch(tmp_path):
+    from pmca.types import ToolCallRequest
+    cfg = _config(read_allowed_dirs=[tmp_path])
+    session, _, logger = _make_session(cfg)
+
+    tool_req = ToolCallRequest(
+        tool_call_id="call_r1",
+        name="read_file",
+        arguments={"path": str(tmp_path / "foo.py")},
+    )
+
+    with patch("pmca.chat.chat_completion", side_effect=[tool_req, "Done"]):
+        with patch("pmca.chat.parse_attachment_paths", return_value=[]):
+            with patch("pmca.chat.execute_read_file", return_value="content"):
+                session.process("read a file")
+
+    calls = [str(c) for c in logger.log_debug.call_args_list]
+    assert any("read_file" in c for c in calls)
+
+
+def test_process_logs_debug_history_trim():
+    session, _, logger = _make_session(_config(history_token_budget=1))
+    session.history = [
+        {"role": "user", "content": "old user message"},
+        {"role": "assistant", "content": "old assistant message"},
+    ]
+
+    with patch("pmca.chat.chat_completion", return_value="reply"):
+        with patch("pmca.chat.parse_attachment_paths", return_value=[]):
+            session.process("new message")
+
+    calls = [str(c) for c in logger.log_debug.call_args_list]
+    assert any("trim" in c.lower() for c in calls)
+
+
+def test_process_logs_debug_attachment_resolved(tmp_path):
+    session, _, logger = _make_session()
+    att = _attachment()
+
+    with patch("pmca.chat.chat_completion", return_value="reply"):
+        with patch("pmca.chat.parse_attachment_paths", return_value=[tmp_path / "secret.py"]):
+            with patch("pmca.chat.resolve_attachments", return_value=[att]):
+                session.process("here [[/secret.py]]")
+
+    calls = [str(c) for c in logger.log_debug.call_args_list]
+    assert any("attachment" in c.lower() for c in calls)
+
+
 def test_process_prints_tool_progress_with_path_for_read_file(capsys, tmp_path):
     from pmca.types import ToolCallRequest
     cfg = _config(read_allowed_dirs=[tmp_path])
@@ -1059,6 +1116,61 @@ def test_process_prints_tool_progress_with_ref_for_git_diff(capsys):
 
     out = capsys.readouterr().out
     assert "[tool: git_diff main]" in out
+
+
+# ---------------------------------------------------------------------------
+# Phase 4c — _tool_result_summary
+# ---------------------------------------------------------------------------
+
+def test_tool_result_summary_read_file_line_count():
+    from pmca.chat import _tool_result_summary
+    assert _tool_result_summary("read_file", "line1\nline2\nline3\n", True) == "3 lines"
+
+
+def test_tool_result_summary_run_tests_passed():
+    from pmca.chat import _tool_result_summary
+    assert _tool_result_summary("run_tests", "5 passed in 1.2s", True) == "passed"
+
+
+def test_tool_result_summary_run_tests_failed():
+    from pmca.chat import _tool_result_summary
+    assert _tool_result_summary("run_tests", "2 FAILED, 3 passed", True) == "FAILED"
+
+
+def test_tool_result_summary_write_ok():
+    from pmca.chat import _tool_result_summary
+    assert _tool_result_summary("write_file", "Written: /tmp/f.py (10 bytes)", True) == "ok"
+
+
+def test_tool_result_summary_denied():
+    from pmca.chat import _tool_result_summary
+    assert _tool_result_summary("write_file", "Write denied by user.", False) == "denied"
+
+
+def test_tool_result_summary_error_result():
+    from pmca.chat import _tool_result_summary
+    assert _tool_result_summary("read_file", "Error: path not found", True) == "error"
+
+
+def test_process_prints_tool_result_summary_after_dispatch(capsys, tmp_path):
+    from pmca.types import ToolCallRequest
+    cfg = _config(read_allowed_dirs=[tmp_path])
+    session, _, _ = _make_session(cfg)
+
+    tool_req = ToolCallRequest(
+        tool_call_id="call_r1",
+        name="read_file",
+        arguments={"path": str(tmp_path / "foo.py")},
+    )
+
+    with patch("pmca.chat.chat_completion", side_effect=[tool_req, "Done"]):
+        with patch("pmca.chat.parse_attachment_paths", return_value=[]):
+            with patch("pmca.chat.execute_read_file", return_value="a\nb\n"):
+                session.process("read it")
+
+    out = capsys.readouterr().out
+    assert "→" in out
+    assert "2 lines" in out
 
 
 def test_process_prints_tool_progress_without_arg_for_unknown_tool(capsys):

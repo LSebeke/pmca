@@ -14,7 +14,7 @@ A terminal chat tool that wraps the OpenAI API with project-aware context. Point
 - **Skills** — inject reusable behaviour guides (`SKILL.md`) into the session on demand; the model can follow `read_file` links into the skill directory for supporting docs
 - **Persistent scratchpad** — the model saves key excerpts from tool call returns across turns, so it doesn't lose what it read earlier in the session
 - **Session resume** — pick up any previous session exactly where you left off
-- **Tool progress output** — each tool call prints a one-line status before it executes (e.g. `[tool: edit_file /src/pmca/chat.py]`), so you can follow long chains without guessing what the model is doing
+- **Tool progress output** — each tool call prints a one-line status before it executes (e.g. `[tool: edit_file /src/pmca/chat.py]`) and a result summary after (e.g. `[tool: edit_file /src/pmca/chat.py → ok]`), so you can follow long chains without guessing what the model is doing
 - **Resilient tool call parsing** — tool call arguments are parsed with `json.loads` first, with an `ast.literal_eval` fallback for single-quoted Python dicts that some models emit; unparseable arguments raise `MalformedToolCallError` rather than a bare `JSONDecodeError`
 
 ### Safety
@@ -274,6 +274,6 @@ The model can call `read_file` on sibling files (e.g. `mocking.md`, `tests.md`) 
 Each session writes two files to `log_folder`:
 
 - `chat_<timestamp>.jsonl` — full exchange log: system prompt, startup docs, every user and assistant message with attachments, and every tool call with its arguments, approval status, and result
-- `debug_<timestamp>.log` — timestamped debug and error entries
+- `debug_<timestamp>.log` — timestamped debug entries: session start, API call timings (`chat_completion: 3.4s, model=gpt-4.1`), full API payloads (messages + response), tool dispatch results, history trim events, and attachment resolution
 
 The JSONL log is the authoritative record of the session and is used verbatim by `--resume`. Partial logs written before an unexpected exit are valid and resumable.

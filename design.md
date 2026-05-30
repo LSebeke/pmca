@@ -353,15 +353,19 @@ class ChatSession:
              substitute identifiers in message.
              Advance _next_attachment_n by len(attachments) on success only.
              Append new attachments to session_attachments.
+             Call logger.log_debug() for each resolved attachment.
           3. Trim history to fit history_token_budget; note turns dropped.
+             Call logger.log_debug() if any turns were dropped.
           4. Assemble message list (see Section 5).
-          5. Call openai_client.chat_completion() with tools list.
+          5. Call openai_client.chat_completion() with tools list and self.logger.
           6. Tool loop: while response is a ToolCallRequest:
                a. Print `[tool: <name> <key_arg>]` via _tool_progress() (always; no config needed).
                b. Execute the tool via _dispatch_tool().
-               c. Log the tool call via SessionLogger.
-               c. Append assistant tool-call message + tool result message to messages list.
-               d. Call chat_completion() again.
+               c. Print `[tool: <name> <key_arg> → <summary>]` via _tool_progress() + _tool_result_summary().
+               d. Log the tool call via SessionLogger.
+               e. Call logger.log_debug() with tool name and truncated result.
+               f. Append assistant tool-call message + tool result message to messages list.
+               g. Call chat_completion() again with self.logger.
           7. Append user + assistant turns to self.history.
           8. Log exchange via SessionLogger.
           9. Return (assistant_response, turns_dropped).
@@ -402,6 +406,16 @@ def _tool_progress(name: str, args: dict) -> str:
     Format: "[tool: <name> <key_arg_value>]" when a key arg is known,
     or "[tool: <name>]" for tools with no key arg (e.g. git_status).
     """
+
+def _tool_result_summary(name: str, result: str, approved: bool) -> str:
+    """
+    Returns a short outcome string appended to the post-dispatch progress line.
+    "denied" if not approved.
+    "error" if result starts with "Error".
+    For read_file: "<N> lines".
+    For run_tests: "passed" or "FAILED".
+    Otherwise: "ok".
+    """
 ```
 
 ---
@@ -415,6 +429,7 @@ def chat_completion(
     messages: list[dict],
     config: Config,
     tools: list[dict] | None = None,
+    logger: SessionLogger | None = None,
 ) -> str | ToolCallRequest:
     """
     Calls openai.chat.completions.create() with config model + optional params.
@@ -425,6 +440,9 @@ def chat_completion(
     with exponential backoff (1s, 2s, 4s).
     Prints "[retrying... attempt N/3]" before each retry.
     Raises APIError (permanent) or APITransientError (exhausted retries).
+    If logger is provided, calls logger.log_api_call(model, duration) and
+    logger.log_api_payload(messages, response_text) for each successful call.
+    For tool call responses, response_text is "[tool_call] <name>(<args_json>)".
     """
 ```
 
@@ -764,6 +782,12 @@ class SessionLogger:
         result: str,
     ) -> None:
         """Appends one {"type": "tool_call", ...} line per tool call within a turn."""
+
+    def log_api_call(self, model: str, duration: float) -> None:
+        """Appends "chat_completion: {duration:.1f}s, model={model}" to debug log."""
+
+    def log_api_payload(self, messages: list[dict], response_text: str) -> None:
+        """Appends full messages list and response text as JSON to debug log."""
 
     def log_debug(self, message: str) -> None:
         """Appends timestamped line to debug log."""

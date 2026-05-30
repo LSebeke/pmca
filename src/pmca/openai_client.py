@@ -3,11 +3,15 @@ from __future__ import annotations
 import ast
 import json
 import time
+from typing import TYPE_CHECKING
 
 import openai
 
 from pmca.config import Config
 from pmca.types import ToolCallRequest
+
+if TYPE_CHECKING:
+    from pmca.logger import SessionLogger
 
 _BACKOFF = [1, 2, 4]
 _MAX_RETRIES = len(_BACKOFF)
@@ -29,6 +33,7 @@ def chat_completion(
     messages: list[dict],
     config: Config,
     tools: list[dict] | None = None,
+    logger: SessionLogger | None = None,
 ) -> str | ToolCallRequest:
     client = openai.OpenAI()
     kwargs = _optional_params(config)
@@ -39,19 +44,27 @@ def chat_completion(
 
     for attempt in range(_MAX_RETRIES + 1):
         try:
+            t0 = time.monotonic()
             response = client.chat.completions.create(
                 model=config.model,
                 messages=messages,
                 **kwargs,
             )
+            duration = time.monotonic() - t0
             msg = response.choices[0].message
             if msg.tool_calls:
                 tc = msg.tool_calls[0]
+                if logger is not None:
+                    logger.log_api_call(config.model, duration)
+                    logger.log_api_payload(messages, f"[tool_call] {tc.function.name}({tc.function.arguments})")
                 return ToolCallRequest(
                     tool_call_id=tc.id,
                     name=tc.function.name,
                     arguments=_parse_tool_arguments(tc.function.arguments),
                 )
+            if logger is not None:
+                logger.log_api_call(config.model, duration)
+                logger.log_api_payload(messages, msg.content or "")
             return msg.content
         except (openai.RateLimitError, openai.APIConnectionError) as exc:
             last_exc = exc

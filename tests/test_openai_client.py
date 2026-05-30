@@ -294,3 +294,47 @@ def test_malformed_tool_call_error_includes_raw_string():
         )
         with pytest.raises(MalformedToolCallError, match=r"\{path: /tmp/f\.py\}"):
             chat_completion([], _config(), tools=[])
+
+
+# ---------------------------------------------------------------------------
+# Phase 4a — API call timing logged
+# ---------------------------------------------------------------------------
+
+def test_chat_completion_logs_api_call_with_model_and_duration():
+    logger = MagicMock()
+    with patch("pmca.openai_client.openai.OpenAI") as MockClient:
+        with patch("pmca.openai_client.time.monotonic", side_effect=[0.0, 2.5]):
+            MockClient.return_value.chat.completions.create.return_value = _mock_success("Hi!")
+            chat_completion([], _config(), logger=logger)
+    logger.log_api_call.assert_called_once_with("gpt-4o-mini", pytest.approx(2.5, abs=0.01))
+
+
+def test_chat_completion_no_log_when_logger_none():
+    with patch("pmca.openai_client.openai.OpenAI") as MockClient:
+        MockClient.return_value.chat.completions.create.return_value = _mock_success()
+        result = chat_completion([], _config(), logger=None)
+    assert result == "Hello!"
+
+
+# ---------------------------------------------------------------------------
+# Phase 4b — Raw API payloads logged
+# ---------------------------------------------------------------------------
+
+def test_chat_completion_logs_api_payload_text_response():
+    logger = MagicMock()
+    messages = [{"role": "user", "content": "hi"}]
+    with patch("pmca.openai_client.openai.OpenAI") as MockClient:
+        MockClient.return_value.chat.completions.create.return_value = _mock_success("Hello!")
+        chat_completion(messages, _config(), logger=logger)
+    logger.log_api_payload.assert_called_once_with(messages, "Hello!")
+
+
+def test_chat_completion_logs_api_payload_tool_call_response():
+    logger = MagicMock()
+    messages = [{"role": "user", "content": "do something"}]
+    with patch("pmca.openai_client.openai.OpenAI") as MockClient:
+        MockClient.return_value.chat.completions.create.return_value = _mock_tool_call_response()
+        chat_completion(messages, _config(), tools=[], logger=logger)
+    args = logger.log_api_payload.call_args[0]
+    assert args[0] == messages
+    assert "write_file" in args[1]

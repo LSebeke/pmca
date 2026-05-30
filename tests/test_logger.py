@@ -293,3 +293,44 @@ def test_log_tool_call_denied_entry(tmp_path):
     entry = lines[-1]
     assert entry["approved"] is False
     assert "denied" in entry["result"].lower()
+
+
+# ---------------------------------------------------------------------------
+# Phase 4a — log_api_call
+# ---------------------------------------------------------------------------
+
+def test_log_api_call_writes_to_debug_log(tmp_path):
+    logger = SessionLogger(tmp_path, "ts")
+    logger.log_api_call("gpt-4o", 3.4)
+    logger.close()
+    content = (tmp_path / "debug_ts.log").read_text()
+    assert "gpt-4o" in content
+    assert "3.4" in content
+
+
+def test_log_api_call_format(tmp_path):
+    logger = SessionLogger(tmp_path, "ts")
+    logger.log_api_call("gpt-4o", 3.4)
+    logger.close()
+    line = (tmp_path / "debug_ts.log").read_text().strip()
+    assert "chat_completion: 3.4s, model=gpt-4o" in line
+
+
+# ---------------------------------------------------------------------------
+# Phase 4b — log_api_payload
+# ---------------------------------------------------------------------------
+
+def test_log_api_payload_writes_messages(tmp_path):
+    logger = SessionLogger(tmp_path, "ts")
+    logger.log_api_payload([{"role": "user", "content": "hello payload"}], "resp")
+    logger.close()
+    content = (tmp_path / "debug_ts.log").read_text()
+    assert "hello payload" in content
+
+
+def test_log_api_payload_writes_response(tmp_path):
+    logger = SessionLogger(tmp_path, "ts")
+    logger.log_api_payload([{"role": "user", "content": "hi"}], "the response text")
+    logger.close()
+    content = (tmp_path / "debug_ts.log").read_text()
+    assert "the response text" in content
