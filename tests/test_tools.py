@@ -461,8 +461,37 @@ def test_edit_file_prints_approval_prompt(tmp_path, capsys):
     assert "increment x" in out
     assert "x = 1" in out
     assert "x = 2" in out
-    assert "--- remove ---" in out
-    assert "--- insert ---" in out
+
+
+# Phase 3 — unified diffs
+
+def test_edit_file_shows_unified_diff_by_default(tmp_path, capsys):
+    f = tmp_path / "code.py"
+    f.write_text("x = 1\n")
+    cfg = _config(write_allowed_dirs=[tmp_path])
+    args = {"path": str(f), "old_string": "x = 1", "new_string": "x = 2", "description": "t"}
+
+    with patch("builtins.input", return_value="n"):
+        execute_edit_file(args, cfg, {f.resolve()})
+
+    out = capsys.readouterr().out
+    assert "@@" in out
+    assert "-x = 1" in out
+    assert "+x = 2" in out
+    assert "--- remove ---" not in out
+
+
+def test_edit_file_no_diff_when_show_diff_off(tmp_path, capsys):
+    f = tmp_path / "code.py"
+    f.write_text("x = 1\n")
+    cfg = _config(write_allowed_dirs=[tmp_path], show_diff_on_approve=False)
+    args = {"path": str(f), "old_string": "x = 1", "new_string": "x = 2", "description": "t"}
+
+    with patch("builtins.input", return_value="n"):
+        execute_edit_file(args, cfg, {f.resolve()})
+
+    out = capsys.readouterr().out
+    assert "@@" not in out
 
 
 def test_edit_file_returns_denial_when_user_denies(tmp_path):
@@ -599,6 +628,37 @@ def test_execute_prompt_warns_when_file_exists(tmp_path, capsys):
 
     out = capsys.readouterr().out
     assert "will be overwritten" in out
+
+
+def test_write_file_shows_unified_diff_when_overwriting_existing(tmp_path, capsys):
+    allowed = tmp_path / "output"
+    allowed.mkdir()
+    target = allowed / "existing.py"
+    target.write_text("x = 1\n")
+    cfg = _config(write_allowed_dirs=[allowed])
+    args = {"path": str(target), "content": "x = 2\n", "description": "update"}
+
+    with patch("builtins.input", return_value="n"):
+        execute_write_file(args, cfg, {target.resolve()})
+
+    out = capsys.readouterr().out
+    assert "@@" in out
+    assert "-x = 1" in out
+    assert "+x = 2" in out
+
+
+def test_write_file_no_diff_for_new_file(tmp_path, capsys):
+    allowed = tmp_path / "output"
+    allowed.mkdir()
+    target = allowed / "new.py"
+    cfg = _config(write_allowed_dirs=[allowed])
+    args = {"path": str(target), "content": "x = 1\n", "description": "new"}
+
+    with patch("builtins.input", return_value="n"):
+        execute_write_file(args, cfg, set())
+
+    out = capsys.readouterr().out
+    assert "@@" not in out
 
 
 def test_write_file_returns_error_when_existing_file_not_read_this_turn(tmp_path):
@@ -1079,6 +1139,18 @@ def test_insert_at_line_denial_does_not_modify_file(tmp_path):
         ok, msg = execute_insert_at_line(args, cfg, {f.resolve()})
     assert ok is False
     assert f.read_text() == "a\nb\n"
+
+
+def test_insert_at_line_shows_unified_diff(tmp_path, capsys):
+    f = tmp_path / "code.py"
+    f.write_text("a\nb\n")
+    cfg = _config(write_allowed_dirs=[tmp_path])
+    args = {"path": str(f), "line_number": 1, "content": "X\n", "mode": "after", "description": "t"}
+    with patch("builtins.input", return_value="n"):
+        execute_insert_at_line(args, cfg, {f.resolve()})
+    out = capsys.readouterr().out
+    assert "@@" in out
+    assert "+X" in out
 
 
 def test_get_tools_includes_insert_at_line_when_write_dirs_configured(tmp_path):

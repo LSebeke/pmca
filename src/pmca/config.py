@@ -25,6 +25,7 @@ class Config:
     write_allowed_dirs: list[Path] = field(default_factory=list)
     read_allowed_dirs: list[Path] = field(default_factory=list)
     auto_approve_writes: bool = False
+    show_diff_on_approve: bool = True
     system_context_fields: list[str] = field(default_factory=list)
     skills_dir: Path | None = None
     git_root: Path | None = None
@@ -72,6 +73,7 @@ def load_config(config_name: str) -> Config:
         write_allowed_dirs=[Path(p).expanduser() for p in (data.get("write_allowed_dirs") or [])],
         read_allowed_dirs=[Path(p).expanduser() for p in (data.get("read_allowed_dirs") or [])],
         auto_approve_writes=bool(data.get("auto_approve_writes", False)),
+        show_diff_on_approve=bool(data.get("show_diff_on_approve", True)),
         system_context_fields=list(data.get("system_context_fields") or []),
         skills_dir=Path(data["skills_dir"]).expanduser() if data.get("skills_dir") else None,
         git_root=Path(data["git_root"]).expanduser() if data.get("git_root") else None,

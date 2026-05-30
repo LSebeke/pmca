@@ -14,6 +14,7 @@ Commands:
   /set history_token_budget=N      Set history token budget for this session
   /set test_timeout=N              Set test run timeout in seconds for this session
   /set auto_approve_writes=true|false  Skip write approval prompts for this session
+  /set show_diff_on_approve=true|false Show unified diff before approval prompt
   /read add <path>            Add a directory to read_allowed_dirs for this session
   /read remove <path>         Remove a directory from read_allowed_dirs for this session
   /extract <path>             Extract code blocks from last response into <path> (type inferred from extension)
@@ -34,7 +35,7 @@ _SETTABLE = {
     "history_token_budget": "history_token_budget",
 }
 
-_CONFIG_BOOL_SETTABLE = {"auto_approve_writes"}
+_CONFIG_BOOL_SETTABLE = {"auto_approve_writes", "show_diff_on_approve"}
 
 
 def run_repl(session: ChatSession) -> None:

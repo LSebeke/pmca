@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import difflib
 import re
 import subprocess
 from pathlib import Path
@@ -680,6 +681,9 @@ def execute_write_file(arguments: dict, config: Config, turn_read_files: set[Pat
     if not config.auto_approve_writes:
         print(f"[write_file] {target} ({size} bytes)")
         print(f"Reason: {reason}")
+        if config.show_diff_on_approve and target.exists():
+            old = target.read_text(encoding="utf-8")
+            _print_unified_diff(old, content, target)
         print(f"{exists_msg} Approve? [y/N] ", end="", flush=True)
         answer = input()
         if answer.strip().lower() != "y":
@@ -720,20 +724,17 @@ def execute_edit_file(arguments: dict, config: Config, turn_read_files: set[Path
     if count > 1:
         return False, f"Error: old_string is ambiguous ({count} occurrences) in {target}; provide more context"
 
+    new_content = content.replace(old_string, new_string, 1)
+
     if not config.auto_approve_writes:
         print(f"[edit_file] {target}")
         print(f"Reason: {reason}")
-        print("--- remove ---")
-        print(old_string)
-        print("--- insert ---")
-        print(new_string)
-        print("---")
+        if config.show_diff_on_approve:
+            _print_unified_diff(content, new_content, target)
         print("Approve? [y/N] ", end="", flush=True)
         answer = input()
         if answer.strip().lower() != "y":
             return False, f"Edit denied by user. Path: {target}"
-
-    new_content = content.replace(old_string, new_string, 1)
     try:
         target.write_text(new_content, encoding="utf-8")
     except OSError as e:
@@ -773,14 +774,19 @@ def execute_insert_at_line(arguments: dict, config: Config, turn_read_files: set
     idx = line_number - 1
     target_line = lines[idx].rstrip("\n")
 
+    new_lines = list(lines)
+    if mode == "before":
+        new_lines.insert(idx, content if content.endswith("\n") else content + "\n")
+    elif mode == "after":
+        new_lines.insert(idx + 1, content if content.endswith("\n") else content + "\n")
+    elif mode == "replace":
+        new_lines[idx] = content if content.endswith("\n") else content + "\n"
+
     if not config.auto_approve_writes:
         print(f"[insert_at_line] {target} (line {line_number}, mode={mode})")
         print(f"Reason: {reason}")
-        print("--- target line ---")
-        print(target_line)
-        print("--- insert ---")
-        print(content)
-        print("---")
+        if config.show_diff_on_approve:
+            _print_unified_diff("".join(lines), "".join(new_lines), target)
         print("Approve? [y/N] ", end="", flush=True)
         answer = input()
         if answer.strip().lower() != "y":
@@ -1090,6 +1096,13 @@ def execute_run_tests(arguments: dict, config: Config) -> tuple[bool, str]:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+def _print_unified_diff(old: str, new: str, path: Path) -> None:
+    old_lines = old.splitlines(keepends=True)
+    new_lines = new.splitlines(keepends=True)
+    diff = difflib.unified_diff(old_lines, new_lines, fromfile=str(path), tofile=str(path))
+    print("".join(diff), end="")
+
 
 def _is_allowed(target: Path, allowed_dirs: list[Path]) -> bool:
     for d in allowed_dirs:

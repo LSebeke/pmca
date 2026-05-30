@@ -20,7 +20,7 @@ A terminal chat tool that wraps the OpenAI API with project-aware context. Point
 ### Safety
 
 - **Write operations are gated by directory allowlists** — `write_allowed_dirs` and `read_allowed_dirs` in your config define the only locations the model can touch; requests outside those directories are rejected outright
-- **Every write and edit requires explicit approval by default** — the tool prints the full path, byte count, reason, and diff before asking `[y/N]`; the model cannot write anything without a keypress from you. Set `auto_approve_writes: true` in config (or `/set auto_approve_writes=true` at runtime) to skip these prompts while keeping the directory guard
+- **Every write and edit requires explicit approval by default** — the tool prints the full path, byte count, reason, and a unified diff before asking `[y/N]`; the model cannot write anything without a keypress from you. Set `auto_approve_writes: true` in config (or `/set auto_approve_writes=true` at runtime) to skip these prompts while keeping the directory guard. Set `show_diff_on_approve: false` (or `/set show_diff_on_approve=false`) to suppress the diff while keeping the prompt
 - **The model must read before it can edit or overwrite** — `edit_file`, `write_file` (on existing files), `insert_at_line`, `delete_file`, and `move_file` are all blocked if the model has not called `read_file` on that path earlier in the same turn; this prevents blind overwrites. After any successful write, the path is removed from the read set — the model must re-read before making a further edit to the same file.
 - **Git tools are read-only by design** — git operations use GitPython's library API rather than a shell subprocess. Paths passed to `git_diff`, `git_blame`, and `git_show_file` are validated against `read_allowed_dirs`. No write or remote operations (push, fetch, commit) are exposed.
 - **File attachments prompt for secrets review** — before injecting any `[[filepath]]` attachment, the tool asks whether you have reviewed the file for secrets (prompt can be disabled with `--unsafe` if you know you will be working with non-secret files)
@@ -179,6 +179,7 @@ system_context_fields:
 | `read_allowed_dirs` | list of paths | `[]` | Enables `read_file`, `list_dir`, `search`, `find_files`, `get_definition` |
 | `write_allowed_dirs` | list of paths | `[]` | Enables `write_file`, `edit_file`, `insert_at_line`, `delete_file`, `move_file` |
 | `auto_approve_writes` | bool | `false` | Skip per-op approval prompts for write ops; directory guard still applies |
+| `show_diff_on_approve` | bool | `true` | Print unified diff before approval prompt; no effect when `auto_approve_writes: true` |
 | `git_root` | path | `null` | Enables all `git_*` tools (read-only; must exist) |
 | `skills_dir` | path | `null` | Directory of skill subdirectories; enables `/skill` command |
 | `test_dir` | path | `null` | Enables `run_tests`; uses `pixi run pytest` if `pixi.toml` present |
@@ -255,6 +256,7 @@ The model can call `read_file` on sibling files (e.g. `mocking.md`, `tests.md`) 
 | `/set history_token_budget=N` | Set history token budget for this session |
 | `/set test_timeout=N` | Set test run timeout in seconds for this session |
 | `/set auto_approve_writes=true\|false` | Skip (or restore) per-op write approval prompts for this session |
+| `/set show_diff_on_approve=true\|false` | Show (or suppress) unified diff before approval prompt |
 | `/read add <path>` | Add a directory to `read_allowed_dirs` for this session (requires approval) |
 | `/read remove <path>` | Remove a directory from `read_allowed_dirs` for this session (requires approval) |
 | `/extract <path>` | Extract code blocks from the last response into `<path>`; fence language inferred from extension (`.py`, `.yaml`/`.yml`, `.json`, `.toml`, `.sh`, `.md`) |

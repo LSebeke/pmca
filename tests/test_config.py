@@ -630,6 +630,22 @@ def test_auto_approve_writes_loads_true_from_yaml(tmp_path):
     assert cfg.auto_approve_writes is True
 
 
+# Phase 3 — show_diff_on_approve
+
+def test_show_diff_on_approve_defaults_true():
+    cfg = Config(name="x", model="m", system_prompt="s", rag_files=[], log_folder=Path("/tmp"))
+    assert cfg.show_diff_on_approve is True
+
+
+def test_show_diff_on_approve_loads_false_from_yaml(tmp_path):
+    rag_file = tmp_path / "code.py"
+    rag_file.write_text("x = 1")
+    yaml_content = minimal_yaml(rag_file, tmp_path / "logs") + "show_diff_on_approve: false\n"
+    cfg_path = write_yaml(tmp_path, "c.yaml", yaml_content)
+    cfg = load_config(str(cfg_path))
+    assert cfg.show_diff_on_approve is False
+
+
 @pytest.mark.parametrize("field,value", [
     ("max_attachment_kb", 0),
     ("max_attachment_kb", -1),
