@@ -977,3 +977,104 @@ def test_active_skill_has_name_content_directory():
     assert skill.name == "tdd"
     assert skill.content == "## TDD"
     assert skill.directory == Path("/skills/tdd")
+
+
+# ---------------------------------------------------------------------------
+# Phase 1 — Tool progress output
+# ---------------------------------------------------------------------------
+
+def test_process_prints_tool_progress_with_path_for_read_file(capsys, tmp_path):
+    from pmca.types import ToolCallRequest
+    cfg = _config(read_allowed_dirs=[tmp_path])
+    session, _, _ = _make_session(cfg)
+
+    tool_req = ToolCallRequest(
+        tool_call_id="call_r1",
+        name="read_file",
+        arguments={"path": str(tmp_path / "foo.py")},
+    )
+
+    with patch("pmca.chat.chat_completion", side_effect=[tool_req, "Done"]):
+        with patch("pmca.chat.parse_attachment_paths", return_value=[]):
+            with patch("pmca.chat.execute_read_file", return_value="content"):
+                session.process("read a file")
+
+    out = capsys.readouterr().out
+    assert f"[tool: read_file {tmp_path / 'foo.py'}]" in out
+
+
+def test_process_prints_tool_progress_with_query_for_search(capsys, tmp_path):
+    from pmca.types import ToolCallRequest
+    cfg = _config(read_allowed_dirs=[tmp_path])
+    session, _, _ = _make_session(cfg)
+
+    tool_req = ToolCallRequest(
+        tool_call_id="call_s1",
+        name="search",
+        arguments={"path": str(tmp_path), "pattern": "def foo", "recursive": True},
+    )
+
+    with patch("pmca.chat.chat_completion", side_effect=[tool_req, "Done"]):
+        with patch("pmca.chat.parse_attachment_paths", return_value=[]):
+            with patch("pmca.chat.execute_search", return_value="no matches"):
+                session.process("search for foo")
+
+    out = capsys.readouterr().out
+    assert "[tool: search def foo]" in out
+
+
+def test_process_prints_tool_progress_with_query_for_rag(capsys):
+    from pmca.types import ToolCallRequest
+    session, _, _ = _make_session()
+
+    tool_req = ToolCallRequest(
+        tool_call_id="call_rag1",
+        name="query_knowledge_base",
+        arguments={"query": "authentication flow", "depth": "shallow"},
+    )
+
+    with patch("pmca.chat.chat_completion", side_effect=[tool_req, "Done"]):
+        with patch("pmca.chat.parse_attachment_paths", return_value=[]):
+            with patch("pmca.chat.execute_rag_query", return_value="results"):
+                session.process("find auth stuff")
+
+    out = capsys.readouterr().out
+    assert "[tool: query_knowledge_base authentication flow]" in out
+
+
+def test_process_prints_tool_progress_with_ref_for_git_diff(capsys):
+    from pmca.types import ToolCallRequest
+    session, _, _ = _make_session()
+
+    tool_req = ToolCallRequest(
+        tool_call_id="call_gd1",
+        name="git_diff",
+        arguments={"ref": "main"},
+    )
+
+    with patch("pmca.chat.chat_completion", side_effect=[tool_req, "Done"]):
+        with patch("pmca.chat.parse_attachment_paths", return_value=[]):
+            with patch("pmca.chat.execute_git_diff", return_value="diff output"):
+                session.process("show diff")
+
+    out = capsys.readouterr().out
+    assert "[tool: git_diff main]" in out
+
+
+def test_process_prints_tool_progress_without_arg_for_unknown_tool(capsys):
+    from pmca.types import ToolCallRequest
+    session, _, _ = _make_session()
+
+    tool_req = ToolCallRequest(
+        tool_call_id="call_u1",
+        name="git_status",
+        arguments={},
+    )
+
+    with patch("pmca.chat.chat_completion", side_effect=[tool_req, "Done"]):
+        with patch("pmca.chat.parse_attachment_paths", return_value=[]):
+            with patch("pmca.chat.execute_git_status", return_value="clean"):
+                session.process("status")
+
+    out = capsys.readouterr().out
+    assert "[tool: git_status]" in out

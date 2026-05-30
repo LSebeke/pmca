@@ -90,6 +90,7 @@ class ChatSession:
         response = chat_completion(messages, self.config, tools=tools)
 
         while isinstance(response, ToolCallRequest):
+            print(_tool_progress(response.name, response.arguments))
             approved, result = self._dispatch_tool(response)
             self.logger.log_tool_call(
                 tool_call_id=response.tool_call_id,
@@ -240,6 +241,23 @@ def _format_skill(skill: ActiveSkill) -> str:
 
 def _format_scratchpad_entry(i: int, entry: "ScratchpadEntry") -> str:
     return f"[SCRATCHPAD_{i}]\nTitle: {entry.title}\n---\n{entry.content}\n---"
+
+
+_TOOL_KEY_ARG: dict[str, str] = {
+    "read_file": "path", "write_file": "path", "edit_file": "path",
+    "insert_at_line": "path", "delete_file": "path", "move_file": "path",
+    "list_dir": "path", "get_definition": "path",
+    "search": "pattern", "find_files": "pattern",
+    "query_knowledge_base": "query",
+    "git_diff": "ref", "git_log": "ref", "git_blame": "path",
+    "git_show_file": "path",
+}
+
+
+def _tool_progress(name: str, args: dict) -> str:
+    key = _TOOL_KEY_ARG.get(name)
+    val = args.get(key) if key else None
+    return f"[tool: {name} {val}]" if val else f"[tool: {name}]"
 
 
 _CONTEXT_ORDER = ("datetime", "os", "shell")

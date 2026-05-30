@@ -14,6 +14,7 @@ A terminal chat tool that wraps the OpenAI API with project-aware context. Point
 - **Skills** — inject reusable behaviour guides (`SKILL.md`) into the session on demand; the model can follow `read_file` links into the skill directory for supporting docs
 - **Persistent scratchpad** — the model saves key excerpts from tool call returns across turns, so it doesn't lose what it read earlier in the session
 - **Session resume** — pick up any previous session exactly where you left off
+- **Tool progress output** — each tool call prints a one-line status before it executes (e.g. `[tool: edit_file /src/pmca/chat.py]`), so you can follow long chains without guessing what the model is doing
 
 ### Safety
 
@@ -76,9 +77,14 @@ with the field name. The check happens before any path expansion...
 
 > Can you add a clearer error message that includes the config file path?
 
-[write_file] /home/user/myproject/src/config.py (3 412 bytes)
+[tool: read_file /home/user/myproject/src/config.py]
+[tool: edit_file /home/user/myproject/src/config.py]
+[edit_file] /home/user/myproject/src/config.py
 Reason: Improve ConfigError message to include config file path
-File exists — will be overwritten. Approve? [y/N] y
+--- /home/user/myproject/src/config.py
++++ /home/user/myproject/src/config.py
+...diff...
+Approve? [y/N] y
 
 Done. I've updated the error message to include the config path...
 ```

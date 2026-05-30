@@ -356,8 +356,9 @@ class ChatSession:
           4. Assemble message list (see Section 5).
           5. Call openai_client.chat_completion() with tools list.
           6. Tool loop: while response is a ToolCallRequest:
-               a. Execute the tool via _dispatch_tool().
-               b. Log the tool call via SessionLogger.
+               a. Print `[tool: <name> <key_arg>]` via _tool_progress() (always; no config needed).
+               b. Execute the tool via _dispatch_tool().
+               c. Log the tool call via SessionLogger.
                c. Append assistant tool-call message + tool result message to messages list.
                d. Call chat_completion() again.
           7. Append user + assistant turns to self.history.
@@ -385,6 +386,21 @@ class ChatSession:
         history_token_budget. Token count estimated as len(content) // 4.
         Returns number of turns dropped.
         """
+```
+
+Module-level helpers:
+
+```python
+_TOOL_KEY_ARG: dict[str, str]
+# Maps each tool name to the argument that best identifies the call target,
+# e.g. "path" for file tools, "query" for RAG/search, "ref" for git diff/log.
+
+def _tool_progress(name: str, args: dict) -> str:
+    """
+    Returns a short status line printed before each tool dispatch.
+    Format: "[tool: <name> <key_arg_value>]" when a key arg is known,
+    or "[tool: <name>]" for tools with no key arg (e.g. git_status).
+    """
 ```
 
 ---
