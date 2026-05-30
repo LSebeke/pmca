@@ -20,10 +20,14 @@ from pmca.tools.git import (
     execute_git_show_file,
     execute_git_status,
 )
-from pmca.tools.misc import (
+from pmca.tools.rag import (
     execute_rag_query,
-    execute_run_tests,
+)
+from pmca.tools.scratchpad import (
     execute_save_to_scratchpad,
+)
+from pmca.tools.testing import (
+    execute_run_tests,
 )
 from pmca.tools.schemas import get_tools
 

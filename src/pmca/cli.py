@@ -11,7 +11,7 @@ from pmca.config import ConfigError, load_config
 from pmca.logger import SessionLogger
 from pmca.rag.store import VectorStore
 from pmca.repl import run_repl
-from pmca.resume import ResumeError, load_resume
+from pmca.restore import ResumeError, restore_session
 
 
 def main() -> None:
@@ -34,7 +34,7 @@ def main() -> None:
     resumed = None
     if args.resume:
         try:
-            resumed = load_resume(Path(args.resume))
+            resumed = restore_session(Path(args.resume))
         except ResumeError as exc:
             print(f"Error: {exc}", file=sys.stderr)
             sys.exit(1)
@@ -54,7 +54,7 @@ def main() -> None:
         store = VectorStore()
         store.build(config.rag_files, cache_dir)
 
-        session = ChatSession(config=config, store=store, logger=logger, unsafe=args.unsafe)
+        session = ChatSession(config=config, store=store, logger=logger, allow_unsafe_attachments=args.unsafe)
 
         if resumed:
             if resumed.system_prompt != config.system_prompt:

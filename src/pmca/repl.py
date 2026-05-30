@@ -35,7 +35,7 @@ Key bindings:
   Esc       Clear current input
 """
 
-_SETTABLE = {
+_SETTABLE_FIELDS = {
     "history_token_budget": "history_token_budget",
 }
 
@@ -69,7 +69,7 @@ def run_repl(session: ChatSession) -> None:
             except SystemExit:
                 break
         else:
-            response, turns_dropped = session.process(user_input)
+            response, turns_dropped = session.send(user_input)
             if response is not None:
                 print(response)
                 if turns_dropped > 0:
@@ -92,7 +92,7 @@ def handle_command(cmd: str, session: ChatSession) -> None:
         return
 
     if name == "/extract":
-        _extract(parts[1] if len(parts) > 1 else "", session)
+        _handle_extract(parts[1] if len(parts) > 1 else "", session)
         return
 
     if name == "/clear":
@@ -128,7 +128,7 @@ def _handle_set(arg: str, session: ChatSession) -> None:
 
     key, _, raw_value = arg.partition("=")
     key = key.strip()
-    attr = _SETTABLE.get(key)
+    attr = _SETTABLE_FIELDS.get(key)
 
     _CONFIG_SETTABLE = {"test_timeout", "max_attachment_kb"}
 
@@ -188,7 +188,7 @@ def _handle_set(arg: str, session: ChatSession) -> None:
         return
 
     if attr is None and key not in _CONFIG_SETTABLE:
-        valid = ", ".join(list(_SETTABLE) + sorted(_CONFIG_STR_SETTABLE) + sorted(_CONFIG_NULLABLE_FLOAT_SETTABLE) + sorted(_CONFIG_NULLABLE_INT_SETTABLE) + sorted(_CONFIG_BOOL_SETTABLE) + sorted(_CONFIG_SETTABLE))
+        valid = ", ".join(list(_SETTABLE_FIELDS) + sorted(_CONFIG_STR_SETTABLE) + sorted(_CONFIG_NULLABLE_FLOAT_SETTABLE) + sorted(_CONFIG_NULLABLE_INT_SETTABLE) + sorted(_CONFIG_BOOL_SETTABLE) + sorted(_CONFIG_SETTABLE))
         print(f"Error: unknown parameter '{key}'. Valid: {valid}")
         return
 
@@ -209,7 +209,7 @@ def _handle_set(arg: str, session: ChatSession) -> None:
     print(f"{key} = {value}")
 
 
-_EXT_TO_FENCE: dict[str, str] = {
+_EXT_TO_LANG: dict[str, str] = {
     ".py": "python",
     ".yaml": "yaml",
     ".yml": "yaml",
@@ -220,16 +220,16 @@ _EXT_TO_FENCE: dict[str, str] = {
 }
 
 
-def _extract(arg: str, session: ChatSession) -> None:
+def _handle_extract(arg: str, session: ChatSession) -> None:
     arg = arg.strip()
     if not arg:
         print("Error: usage: /extract <absolute-path>")
         return
 
     path = Path(arg)
-    fence = _EXT_TO_FENCE.get(path.suffix)
+    fence = _EXT_TO_LANG.get(path.suffix)
     if fence is None:
-        supported = ", ".join(sorted(_EXT_TO_FENCE))
+        supported = ", ".join(sorted(_EXT_TO_LANG))
         print(f"Error: unsupported extension '{path.suffix}'. Supported: {supported}")
         return
 

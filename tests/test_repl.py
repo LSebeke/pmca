@@ -22,7 +22,7 @@ def _run(inputs: list, session=None):
     """Run the REPL with a fixed sequence of inputs, exiting on EOFError."""
     s = session or _session()
     if session is None:
-        s.process.return_value = ("response", 0)
+        s.send.return_value = ("response", 0)
     mock_prompt = MagicMock()
     mock_prompt.prompt.side_effect = inputs + [EOFError()]
     with patch("pmca.repl.PromptSession", return_value=mock_prompt):
@@ -98,19 +98,19 @@ def test_exit_raises_system_exit():
 
 def test_non_command_calls_process():
     session = _run(["what is python?"])
-    session.process.assert_called_once_with("what is python?")
+    session.send.assert_called_once_with("what is python?")
 
 
 def test_non_command_prints_response(capsys):
     session = _session()
-    session.process.return_value = ("great answer", 0)
+    session.send.return_value = ("great answer", 0)
     _run(["hi"], session=session)
     assert "great answer" in capsys.readouterr().out
 
 
 def test_trim_notice_printed_when_turns_dropped(capsys):
     session = _session()
-    session.process.return_value = ("response", 2)
+    session.send.return_value = ("response", 2)
     _run(["q"], session=session)
     out = capsys.readouterr().out
     assert "2 earlier turn(s) omitted from context" in out
@@ -118,14 +118,14 @@ def test_trim_notice_printed_when_turns_dropped(capsys):
 
 def test_no_trim_notice_when_zero_dropped(capsys):
     session = _session()
-    session.process.return_value = ("response", 0)
+    session.send.return_value = ("response", 0)
     _run(["q"], session=session)
     assert "omitted from context" not in capsys.readouterr().out
 
 
 def test_aborted_message_no_response_printed(capsys):
     session = _session()
-    session.process.return_value = (None, 0)
+    session.send.return_value = (None, 0)
     _run(["hi"], session=session)
     out = capsys.readouterr().out
     assert "None" not in out
@@ -134,13 +134,13 @@ def test_aborted_message_no_response_printed(capsys):
 
 def test_empty_input_skipped():
     session = _run(["", "  ", "hello"])
-    session.process.assert_called_once_with("hello")
+    session.send.assert_called_once_with("hello")
 
 
 def test_command_dispatched_not_processed(capsys):
     session = _session()
     _run(["/help"], session=session)
-    session.process.assert_not_called()
+    session.send.assert_not_called()
 
 
 def test_keyboard_interrupt_exits_loop():

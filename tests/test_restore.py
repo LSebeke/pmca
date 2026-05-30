@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from pmca.resume import ResumeError, load_resume
+from pmca.restore import ResumeError, restore_session
 
 
 # ---------------------------------------------------------------------------
@@ -33,14 +33,14 @@ def _minimal_log(tmp_path: Path) -> Path:
 
 def test_load_resume_raises_on_missing_file(tmp_path):
     with pytest.raises(ResumeError, match="not found"):
-        load_resume(tmp_path / "nonexistent.jsonl")
+        restore_session(tmp_path / "nonexistent.jsonl")
 
 
 def test_load_resume_raises_on_malformed_json(tmp_path):
     p = tmp_path / "chat_ts.jsonl"
     p.write_text("not json\n")
     with pytest.raises(ResumeError, match="line 1"):
-        load_resume(p)
+        restore_session(p)
 
 
 def test_load_resume_reports_all_malformed_line_numbers(tmp_path):
@@ -53,7 +53,7 @@ def test_load_resume_reports_all_malformed_line_numbers(tmp_path):
         + "another bad\n"
     )
     with pytest.raises(ResumeError) as exc_info:
-        load_resume(p)
+        restore_session(p)
     msg = str(exc_info.value)
     assert "line 2" in msg
     assert "line 5" in msg
@@ -63,7 +63,7 @@ def test_load_resume_raises_on_zero_valid_turns(tmp_path):
     p = tmp_path / "chat_ts.jsonl"
     _write_jsonl(p, [{"type": "system_prompt", "content": "sp"}])
     with pytest.raises(ResumeError, match="(?i)no.*turn"):
-        load_resume(p)
+        restore_session(p)
 
 
 def test_load_resume_raises_if_no_system_prompt_entry(tmp_path):
@@ -73,7 +73,7 @@ def test_load_resume_raises_if_no_system_prompt_entry(tmp_path):
         {"type": "exchange", "timestamp": "t", "role": "assistant", "content": "ok"},
     ])
     with pytest.raises(ResumeError, match="(?i)system.?prompt"):
-        load_resume(p)
+        restore_session(p)
 
 
 # ---------------------------------------------------------------------------
@@ -82,7 +82,7 @@ def test_load_resume_raises_if_no_system_prompt_entry(tmp_path):
 
 def test_load_resume_returns_system_prompt(tmp_path):
     p = _minimal_log(tmp_path)
-    result = load_resume(p)
+    result = restore_session(p)
     assert result.system_prompt == "You are helpful."
 
 
@@ -99,13 +99,13 @@ def test_load_resume_returns_startup_docs(tmp_path):
         {"type": "exchange", "timestamp": "t", "role": "user", "content": "hi", "rag_chunks": [], "attachments": []},
         {"type": "exchange", "timestamp": "t", "role": "assistant", "content": "ok"},
     ])
-    result = load_resume(p)
+    result = restore_session(p)
     assert result.startup_docs == [(Path("/docs/a.md"), "# A"), (Path("/docs/b.md"), "# B")]
 
 
 def test_load_resume_returns_empty_startup_docs_when_none(tmp_path):
     p = _minimal_log(tmp_path)
-    result = load_resume(p)
+    result = restore_session(p)
     assert result.startup_docs == []
 
 
@@ -115,7 +115,7 @@ def test_load_resume_returns_empty_startup_docs_when_none(tmp_path):
 
 def test_load_resume_returns_history_with_role_and_content(tmp_path):
     p = _minimal_log(tmp_path)
-    result = load_resume(p)
+    result = restore_session(p)
     assert result.history == [
         {"role": "user", "content": "hello"},
         {"role": "assistant", "content": "hi there"},
@@ -131,7 +131,7 @@ def test_load_resume_preserves_turn_order(tmp_path):
         {"type": "exchange", "timestamp": "t", "role": "user", "content": "q2", "rag_chunks": [], "attachments": []},
         {"type": "exchange", "timestamp": "t", "role": "assistant", "content": "a2"},
     ])
-    result = load_resume(p)
+    result = restore_session(p)
     assert [m["content"] for m in result.history] == ["q1", "a1", "q2", "a2"]
 
 
@@ -143,7 +143,7 @@ def test_load_resume_skips_non_exchange_entries_in_history(tmp_path):
         {"type": "exchange", "timestamp": "t", "role": "user", "content": "hi", "rag_chunks": [], "attachments": []},
         {"type": "exchange", "timestamp": "t", "role": "assistant", "content": "hello"},
     ])
-    result = load_resume(p)
+    result = restore_session(p)
     assert len(result.history) == 2
     assert result.history[0]["role"] == "user"
 
@@ -161,7 +161,7 @@ def test_load_resume_returns_last_assistant_message(tmp_path):
         {"type": "exchange", "timestamp": "t", "role": "user", "content": "q2", "rag_chunks": [], "attachments": []},
         {"type": "exchange", "timestamp": "t", "role": "assistant", "content": "final answer"},
     ])
-    result = load_resume(p)
+    result = restore_session(p)
     assert result.last_assistant_message == "final answer"
 
 
@@ -180,7 +180,7 @@ def test_load_resume_returns_session_attachments(tmp_path):
         },
         {"type": "exchange", "timestamp": "t", "role": "assistant", "content": "ok"},
     ])
-    result = load_resume(p)
+    result = restore_session(p)
     assert len(result.session_attachments) == 1
     att = result.session_attachments[0]
     assert att.identifier == "CONTEXT_1"
@@ -199,13 +199,13 @@ def test_load_resume_deduplicates_session_attachments_by_identifier(tmp_path):
         {"type": "exchange", "timestamp": "t", "role": "user", "content": "t2", "rag_chunks": [], "attachments": [att]},
         {"type": "exchange", "timestamp": "t", "role": "assistant", "content": "r2"},
     ])
-    result = load_resume(p)
+    result = restore_session(p)
     assert len(result.session_attachments) == 1
 
 
 def test_load_resume_session_attachments_empty_when_none(tmp_path):
     p = _minimal_log(tmp_path)
-    result = load_resume(p)
+    result = restore_session(p)
     assert result.session_attachments == []
 
 
@@ -215,7 +215,7 @@ def test_load_resume_session_attachments_empty_when_none(tmp_path):
 
 def test_load_resume_returns_jsonl_path(tmp_path):
     p = _minimal_log(tmp_path)
-    result = load_resume(p)
+    result = restore_session(p)
     assert result.jsonl_path == p
 
 
@@ -233,13 +233,13 @@ def test_load_resume_next_attachment_n_continues_from_max(tmp_path):
         },
         {"type": "exchange", "timestamp": "t", "role": "assistant", "content": "ok"},
     ])
-    result = load_resume(p)
+    result = restore_session(p)
     assert result.next_attachment_n == 3
 
 
 def test_load_resume_next_attachment_n_is_1_when_no_attachments(tmp_path):
     p = _minimal_log(tmp_path)
-    result = load_resume(p)
+    result = restore_session(p)
     assert result.next_attachment_n == 1
 
 
@@ -249,11 +249,11 @@ def test_load_resume_next_attachment_n_is_1_when_no_attachments(tmp_path):
 
 def test_load_resume_result_has_no_resumed_context_field(tmp_path):
     p = _minimal_log(tmp_path)
-    result = load_resume(p)
+    result = restore_session(p)
     assert not hasattr(result, "resumed_context")
 
 
 def test_load_resume_result_has_no_session_rag_chunks_field(tmp_path):
     p = _minimal_log(tmp_path)
-    result = load_resume(p)
+    result = restore_session(p)
     assert not hasattr(result, "session_rag_chunks")

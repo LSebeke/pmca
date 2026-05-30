@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch, call
 import pytest
 
 from pmca.cli import main
-from pmca.resume import ResumedSession
+from pmca.restore import RestoredSession
 
 
 # ---------------------------------------------------------------------------
@@ -92,7 +92,7 @@ def test_unsafe_flag_sets_session_unsafe(config_file):
                 _run(["pmca", str(config_file), "--unsafe"])
 
     _, kwargs = MockSession.call_args
-    assert kwargs.get("unsafe") is True or MockSession.call_args[1].get("unsafe") is True
+    assert kwargs.get("allow_unsafe_attachments") is True or MockSession.call_args[1].get("allow_unsafe_attachments") is True
 
 
 def test_no_unsafe_flag_defaults_to_false(config_file):
@@ -102,7 +102,7 @@ def test_no_unsafe_flag_defaults_to_false(config_file):
                 _run(["pmca", str(config_file)])
 
     kwargs = MockSession.call_args[1]
-    assert kwargs.get("unsafe") is False or kwargs.get("unsafe") is None
+    assert kwargs.get("allow_unsafe_attachments") is False or kwargs.get("allow_unsafe_attachments") is None
 
 
 # ---------------------------------------------------------------------------
@@ -187,8 +187,8 @@ def test_resume_flag_uses_from_existing_logger(config_file, resume_log):
     with patch("pmca.cli.VectorStore"):
         with patch("pmca.cli.run_repl"):
             with patch("pmca.cli.SessionLogger") as MockLogger:
-                with patch("pmca.cli.load_resume") as mock_lr:
-                    mock_lr.return_value = ResumedSession(
+                with patch("pmca.cli.restore_session") as mock_lr:
+                    mock_lr.return_value = RestoredSession(
                         system_prompt="You are helpful.",
                         startup_docs=[],
                         history=[],

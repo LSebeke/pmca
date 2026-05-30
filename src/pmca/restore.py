@@ -12,7 +12,7 @@ class ResumeError(Exception):
 
 
 @dataclass
-class ResumedSession:
+class RestoredSession:
     system_prompt: str
     startup_docs: list[tuple[Path, str]]
     history: list[dict]
@@ -22,7 +22,7 @@ class ResumedSession:
     next_attachment_n: int
 
 
-def load_resume(path: Path) -> ResumedSession:
+def restore_session(path: Path) -> RestoredSession:
     if not path.exists():
         raise ResumeError(f"Resume file not found: {path}")
 
@@ -74,7 +74,7 @@ def load_resume(path: Path) -> ResumedSession:
     session_attachments = _collect_attachments(exchange_entries)
     next_attachment_n = _compute_next_attachment_n(exchange_entries)
 
-    return ResumedSession(
+    return RestoredSession(
         system_prompt=system_prompt,
         startup_docs=startup_docs,
         history=history,

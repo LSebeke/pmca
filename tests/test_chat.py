@@ -32,13 +32,13 @@ def _attachment(identifier: str = "CONTEXT_1") -> Attachment:
     )
 
 
-def _make_session(config=None, *, unsafe=False):
+def _make_session(config=None, *, allow_unsafe_attachments=False):
     cfg = config or _config()
     store = MagicMock()
     store._chunks = []
     store.query.return_value = []
     logger = MagicMock()
-    return ChatSession(config=cfg, store=store, logger=logger, unsafe=unsafe), store, logger
+    return ChatSession(config=cfg, store=store, logger=logger, allow_unsafe_attachments=allow_unsafe_attachments), store, logger
 
 
 # ---------------------------------------------------------------------------
@@ -136,7 +136,7 @@ def test_system_context_omitted_from_messages_when_fields_empty():
 
     with patch("pmca.chat.chat_completion", return_value="r") as mock_cc:
         with patch("pmca.chat.parse_attachment_paths", return_value=[]):
-            session.process("hi")
+            session.send("hi")
 
     messages = mock_cc.call_args[0][0]
     assert all("Session started:" not in m.get("content", "") for m in messages)
@@ -149,7 +149,7 @@ def test_system_context_is_second_system_message_when_fields_set():
 
     with patch("pmca.chat.chat_completion", return_value="r") as mock_cc:
         with patch("pmca.chat.parse_attachment_paths", return_value=[]):
-            session.process("hi")
+            session.send("hi")
 
     messages = mock_cc.call_args[0][0]
     assert messages[1]["role"] == "system"
@@ -167,7 +167,7 @@ def test_process_does_not_call_store_query_directly():
 
     with patch("pmca.chat.chat_completion", return_value="reply"):
         with patch("pmca.chat.parse_attachment_paths", return_value=[]):
-            session.process("hello world")
+            session.send("hello world")
 
     store.query.assert_not_called()
 
@@ -186,13 +186,13 @@ def test_turn_seen_chunks_resets_between_turns():
     with patch("pmca.chat.chat_completion", side_effect=[rag_req, "answer1"]):
         with patch("pmca.chat.parse_attachment_paths", return_value=[]):
             with patch("pmca.chat.execute_rag_query", return_value="[RAG_1]...") as mock_rag:
-                session.process("t1")
+                session.send("t1")
 
     seen_after_turn1 = set(session._turn_seen_chunks)
 
     with patch("pmca.chat.chat_completion", return_value="answer2"):
         with patch("pmca.chat.parse_attachment_paths", return_value=[]):
-            session.process("t2")
+            session.send("t2")
 
     assert session._turn_seen_chunks == set()  # reset at start of turn 2
 
@@ -206,7 +206,7 @@ def test_process_sends_system_prompt_first():
 
     with patch("pmca.chat.chat_completion", return_value="r") as mock_cc:
         with patch("pmca.chat.parse_attachment_paths", return_value=[]):
-            session.process("hi")
+            session.send("hi")
 
     messages = mock_cc.call_args[0][0]
     assert messages[0] == {"role": "system", "content": "You are helpful."}
@@ -217,7 +217,7 @@ def test_process_has_no_rag_system_message():
 
     with patch("pmca.chat.chat_completion", return_value="r") as mock_cc:
         with patch("pmca.chat.parse_attachment_paths", return_value=[]):
-            session.process("hi")
+            session.send("hi")
 
     messages = mock_cc.call_args[0][0]
     assert not any("[RAG" in m.get("content", "") for m in messages)
@@ -231,7 +231,7 @@ def test_process_includes_attachment_system_messages():
         with patch("pmca.chat.parse_attachment_paths", return_value=[att.path]):
             with patch("pmca.chat.resolve_attachments", return_value=[att]):
                 with patch("pmca.chat.substitute_identifiers", return_value="hi"):
-                    session.process("hi")
+                    session.send("hi")
 
     messages = mock_cc.call_args[0][0]
     att_msg = next(m for m in messages if "[CONTEXT_1]" in m.get("content", ""))
@@ -244,7 +244,7 @@ def test_process_omits_attachment_messages_when_none():
 
     with patch("pmca.chat.chat_completion", return_value="r") as mock_cc:
         with patch("pmca.chat.parse_attachment_paths", return_value=[]):
-            session.process("hi")
+            session.send("hi")
 
     messages = mock_cc.call_args[0][0]
     assert not any("[CONTEXT" in m.get("content", "") for m in messages)
@@ -257,7 +257,7 @@ def test_startup_docs_appear_after_system_prompt():
 
     with patch("pmca.chat.chat_completion", return_value="r") as mock_cc:
         with patch("pmca.chat.parse_attachment_paths", return_value=[]):
-            session.process("hi")
+            session.send("hi")
 
     messages = mock_cc.call_args[0][0]
     assert messages[0]["role"] == "system"
@@ -276,7 +276,7 @@ def test_each_startup_doc_is_separate_system_message():
 
     with patch("pmca.chat.chat_completion", return_value="r") as mock_cc:
         with patch("pmca.chat.parse_attachment_paths", return_value=[]):
-            session.process("hi")
+            session.send("hi")
 
     messages = mock_cc.call_args[0][0]
     startup_messages = [m for m in messages if "[STARTUP_DOC]" in m.get("content", "")]
@@ -290,7 +290,7 @@ def test_no_startup_doc_messages_when_startup_docs_empty():
 
     with patch("pmca.chat.chat_completion", return_value="r") as mock_cc:
         with patch("pmca.chat.parse_attachment_paths", return_value=[]):
-            session.process("hi")
+            session.send("hi")
 
     messages = mock_cc.call_args[0][0]
     assert not any("[STARTUP_DOC]" in m.get("content", "") for m in messages)
@@ -308,7 +308,7 @@ def test_process_message_order_system_attachment_history_user():
         with patch("pmca.chat.parse_attachment_paths", return_value=[att.path]):
             with patch("pmca.chat.resolve_attachments", return_value=[att]):
                 with patch("pmca.chat.substitute_identifiers", return_value="new q"):
-                    session.process("new q")
+                    session.send("new q")
 
     messages = mock_cc.call_args[0][0]
     roles = [m["role"] for m in messages]
@@ -323,7 +323,7 @@ def test_process_current_user_message_is_last():
 
     with patch("pmca.chat.chat_completion", return_value="r") as mock_cc:
         with patch("pmca.chat.parse_attachment_paths", return_value=[]):
-            session.process("my question")
+            session.send("my question")
 
     messages = mock_cc.call_args[0][0]
     assert messages[-1] == {"role": "user", "content": "my question"}
@@ -338,7 +338,7 @@ def test_process_appends_user_and_assistant_to_history():
 
     with patch("pmca.chat.chat_completion", return_value="great answer"):
         with patch("pmca.chat.parse_attachment_paths", return_value=[]):
-            session.process("my question")
+            session.send("my question")
 
     assert len(session.history) == 2
     assert session.history[0] == {"role": "user", "content": "my question"}
@@ -351,7 +351,7 @@ def test_process_does_not_append_history_on_abort():
 
     with patch("pmca.chat.parse_attachment_paths", return_value=[Path("/f.py")]):
         with patch("pmca.chat.resolve_attachments", side_effect=AttachmentAborted()):
-            session.process("hi")
+            session.send("hi")
 
     assert session.history == []
 
@@ -361,7 +361,7 @@ def test_process_returns_none_and_zero_on_attachment_error():
     from pmca.attachments import AttachmentError
 
     with patch("pmca.chat.parse_attachment_paths", side_effect=AttachmentError("file not found: /bad.py")):
-        result = session.process("hi [[/bad.py]]")
+        result = session.send("hi [[/bad.py]]")
 
     assert result == (None, 0)
 
@@ -371,7 +371,7 @@ def test_process_does_not_append_history_on_attachment_error():
     from pmca.attachments import AttachmentError
 
     with patch("pmca.chat.parse_attachment_paths", side_effect=AttachmentError("file not found: /bad.py")):
-        session.process("hi [[/bad.py]]")
+        session.send("hi [[/bad.py]]")
 
     assert session.history == []
 
@@ -381,7 +381,7 @@ def test_process_does_not_log_on_attachment_error():
     from pmca.attachments import AttachmentError
 
     with patch("pmca.chat.parse_attachment_paths", side_effect=AttachmentError("file not found: /bad.py")):
-        session.process("hi [[/bad.py]]")
+        session.send("hi [[/bad.py]]")
 
     logger.log_exchange.assert_not_called()
 
@@ -391,7 +391,7 @@ def test_process_prints_error_message_on_attachment_error(capsys):
     from pmca.attachments import AttachmentError
 
     with patch("pmca.chat.parse_attachment_paths", side_effect=AttachmentError("file not found: /bad.py")):
-        session.process("hi [[/bad.py]]")
+        session.send("hi [[/bad.py]]")
 
     out = capsys.readouterr().out
     assert "file not found: /bad.py" in out
@@ -414,7 +414,7 @@ def test_session_attachments_accumulates_after_turn():
         with patch("pmca.chat.parse_attachment_paths", return_value=[att.path]):
             with patch("pmca.chat.resolve_attachments", return_value=[att]):
                 with patch("pmca.chat.substitute_identifiers", return_value="hi"):
-                    session.process("hi")
+                    session.send("hi")
 
     assert session.session_attachments == [att]
 
@@ -427,11 +427,11 @@ def test_session_attachments_appear_in_subsequent_turn_with_no_new_attachments()
         with patch("pmca.chat.parse_attachment_paths", return_value=[att.path]):
             with patch("pmca.chat.resolve_attachments", return_value=[att]):
                 with patch("pmca.chat.substitute_identifiers", return_value="t1"):
-                    session.process("t1")
+                    session.send("t1")
 
     with patch("pmca.chat.chat_completion", return_value="r") as mock_cc:
         with patch("pmca.chat.parse_attachment_paths", return_value=[]):
-            session.process("t2")
+            session.send("t2")
 
     messages = mock_cc.call_args[0][0]
     assert any("[CONTEXT_1]" in m.get("content", "") for m in messages)
@@ -443,7 +443,7 @@ def test_session_attachments_not_accumulated_on_abort():
 
     with patch("pmca.chat.parse_attachment_paths", return_value=[Path("/f.py")]):
         with patch("pmca.chat.resolve_attachments", side_effect=AttachmentAborted()):
-            session.process("hi")
+            session.send("hi")
 
     assert session.session_attachments == []
 
@@ -463,7 +463,7 @@ def test_turn_seen_chunks_reset_at_start_of_each_process():
 
     with patch("pmca.chat.chat_completion", return_value="r"):
         with patch("pmca.chat.parse_attachment_paths", return_value=[]):
-            session.process("hi")
+            session.send("hi")
 
     assert session._turn_seen_chunks == set()
 
@@ -481,7 +481,7 @@ def test_next_attachment_n_advances_after_successful_turn(tmp_path):
         with patch("pmca.chat.parse_attachment_paths", return_value=[att1.path, att2.path]):
             with patch("pmca.chat.resolve_attachments", return_value=[att1, att2]):
                 with patch("pmca.chat.substitute_identifiers", return_value="hi"):
-                    session.process("hi")
+                    session.send("hi")
 
     assert session._next_attachment_n == 3
 
@@ -495,9 +495,9 @@ def test_next_attachment_n_passes_to_resolve_attachments(tmp_path):
         with patch("pmca.chat.parse_attachment_paths", return_value=[att.path]):
             with patch("pmca.chat.resolve_attachments", return_value=[att]) as mock_resolve:
                 with patch("pmca.chat.substitute_identifiers", return_value="hi"):
-                    session.process("hi")
+                    session.send("hi")
 
-    mock_resolve.assert_called_once_with([att.path], session.config.max_attachment_kb, session.unsafe, start_n=5)
+    mock_resolve.assert_called_once_with([att.path], session.config.max_attachment_kb, session.allow_unsafe_attachments, start_n=5)
 
 
 def test_next_attachment_n_does_not_advance_on_abort(tmp_path):
@@ -506,7 +506,7 @@ def test_next_attachment_n_does_not_advance_on_abort(tmp_path):
 
     with patch("pmca.chat.parse_attachment_paths", return_value=[Path("/f.py")]):
         with patch("pmca.chat.resolve_attachments", side_effect=AttachmentAborted()):
-            session.process("hi")
+            session.send("hi")
 
     assert session._next_attachment_n == 1
 
@@ -520,7 +520,7 @@ def test_process_returns_response_and_turns_dropped():
 
     with patch("pmca.chat.chat_completion", return_value="answer"):
         with patch("pmca.chat.parse_attachment_paths", return_value=[]):
-            response, turns_dropped = session.process("hi")
+            response, turns_dropped = session.send("hi")
 
     assert response == "answer"
     assert turns_dropped == 0
@@ -532,7 +532,7 @@ def test_process_returns_none_response_on_abort():
 
     with patch("pmca.chat.parse_attachment_paths", return_value=[Path("/f.py")]):
         with patch("pmca.chat.resolve_attachments", side_effect=AttachmentAborted()):
-            result = session.process("hi")
+            result = session.send("hi")
 
     assert result[0] is None
 
@@ -546,7 +546,7 @@ def test_process_calls_log_exchange():
 
     with patch("pmca.chat.chat_completion", return_value="reply"):
         with patch("pmca.chat.parse_attachment_paths", return_value=[]):
-            session.process("hi")
+            session.send("hi")
 
     logger.log_exchange.assert_called_once()
 
@@ -557,7 +557,7 @@ def test_process_does_not_log_on_abort():
 
     with patch("pmca.chat.parse_attachment_paths", return_value=[Path("/f.py")]):
         with patch("pmca.chat.resolve_attachments", side_effect=AttachmentAborted()):
-            session.process("hi")
+            session.send("hi")
 
     logger.log_exchange.assert_not_called()
 
@@ -674,7 +674,7 @@ def test_trim_history_returns_turned_dropped_in_process():
 
     with patch("pmca.chat.chat_completion", return_value="ok"):
         with patch("pmca.chat.parse_attachment_paths", return_value=[]):
-            _, turns_dropped = session.process("new q")
+            _, turns_dropped = session.send("new q")
 
     assert turns_dropped == 1
 
@@ -689,7 +689,7 @@ def test_process_passes_tools_to_chat_completion_when_write_allowed_dirs_set(tmp
 
     with patch("pmca.chat.chat_completion", return_value="done") as mock_cc:
         with patch("pmca.chat.parse_attachment_paths", return_value=[]):
-            session.process("write something")
+            session.send("write something")
 
     _, kwargs = mock_cc.call_args
     assert "tools" in kwargs
@@ -701,7 +701,7 @@ def test_process_passes_no_tools_when_write_allowed_dirs_empty():
 
     with patch("pmca.chat.chat_completion", return_value="done") as mock_cc:
         with patch("pmca.chat.parse_attachment_paths", return_value=[]):
-            session.process("hello")
+            session.send("hello")
 
     _, kwargs = mock_cc.call_args
     assert kwargs.get("tools") is None
@@ -721,7 +721,7 @@ def test_process_tool_loop_executes_tool_and_continues(tmp_path):
     with patch("pmca.chat.chat_completion", side_effect=[tool_req, "All done!"]) as mock_cc:
         with patch("pmca.chat.parse_attachment_paths", return_value=[]):
             with patch("pmca.chat.execute_write_file", return_value=(True, "Written: /out.py (4 bytes)")) as mock_exec:
-                response, _ = session.process("write a file")
+                response, _ = session.send("write a file")
 
     assert response == "All done!"
     mock_exec.assert_called_once()
@@ -742,7 +742,7 @@ def test_process_tool_loop_logs_tool_call(tmp_path):
     with patch("pmca.chat.chat_completion", side_effect=[tool_req, "Done"]):
         with patch("pmca.chat.parse_attachment_paths", return_value=[]):
             with patch("pmca.chat.execute_write_file", return_value=(True, "Written: /out.py (2 bytes)")):
-                session.process("write")
+                session.send("write")
 
     logger.log_tool_call.assert_called_once_with(
         tool_call_id="call_1",
@@ -767,7 +767,7 @@ def test_process_second_api_call_includes_tool_result_messages(tmp_path):
     with patch("pmca.chat.chat_completion", side_effect=[tool_req, "Done"]) as mock_cc:
         with patch("pmca.chat.parse_attachment_paths", return_value=[]):
             with patch("pmca.chat.execute_write_file", return_value=(False, "Write denied by user. Path: /f.py")):
-                session.process("write")
+                session.send("write")
 
     second_call_messages = mock_cc.call_args_list[1][0][0]
     roles = [m["role"] for m in second_call_messages]
@@ -795,7 +795,7 @@ def test_process_dispatches_query_knowledge_base(tmp_path):
     with patch("pmca.chat.chat_completion", side_effect=[tool_req, "Done"]):
         with patch("pmca.chat.parse_attachment_paths", return_value=[]):
             with patch("pmca.chat.execute_rag_query", return_value="[RAG_1]...") as mock_rag:
-                response, _ = session.process("find stuff")
+                response, _ = session.send("find stuff")
 
     assert response == "Done"
     mock_rag.assert_called_once()
@@ -828,7 +828,7 @@ def test_process_dispatches_read_tool(tmp_path, tool_name, executor_path, execut
     with patch("pmca.chat.chat_completion", side_effect=[tool_req, "Done"]):
         with patch("pmca.chat.parse_attachment_paths", return_value=[]):
             with patch(executor_path, return_value=executor_result) as mock_exec:
-                response, _ = session.process("explore")
+                response, _ = session.send("explore")
 
     assert response == "Done"
     mock_exec.assert_called_once()
@@ -876,7 +876,7 @@ def test_process_dispatches_save_to_scratchpad():
     )
     with patch("pmca.chat.chat_completion", side_effect=[tool_req, "Saved."]):
         with patch("pmca.chat.parse_attachment_paths", return_value=[]):
-            response, _ = session.process("remember this")
+            response, _ = session.send("remember this")
 
     assert response == "Saved."
     assert len(session._scratchpad) == 1
@@ -894,7 +894,7 @@ def test_process_prints_scratchpad_notice_when_changed(capsys):
     )
     with patch("pmca.chat.chat_completion", side_effect=[tool_req, "Done."]):
         with patch("pmca.chat.parse_attachment_paths", return_value=[]):
-            session.process("go")
+            session.send("go")
 
     out = capsys.readouterr().out
     assert "[Scratchpad:" in out
@@ -905,7 +905,7 @@ def test_process_does_not_print_scratchpad_notice_when_unchanged(capsys):
     session, _, _ = _make_session()
     with patch("pmca.chat.chat_completion", return_value="Hello"):
         with patch("pmca.chat.parse_attachment_paths", return_value=[]):
-            session.process("hi")
+            session.send("hi")
     out = capsys.readouterr().out
     assert "[Scratchpad:" not in out
 
@@ -936,7 +936,7 @@ def test_active_skills_injected_as_system_messages():
 
     with patch("pmca.chat.chat_completion", return_value="r") as mock_cc:
         with patch("pmca.chat.parse_attachment_paths", return_value=[]):
-            session.process("hi")
+            session.send("hi")
 
     messages = mock_cc.call_args[0][0]
     skill_msgs = [m for m in messages if m.get("role") == "system" and "Write tests first." in m.get("content", "")]
@@ -979,6 +979,18 @@ def test_active_skill_has_name_content_directory():
     assert skill.directory == Path("/skills/tdd")
 
 
+def test_active_skill_is_a_dataclass():
+    import dataclasses
+    assert dataclasses.is_dataclass(ActiveSkill)
+
+
+def test_active_skill_is_frozen():
+    import dataclasses
+    skill = ActiveSkill(name="tdd", content="## TDD", directory=Path("/skills/tdd"))
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        skill.name = "other"
+
+
 # ---------------------------------------------------------------------------
 # Phase 1 — Tool progress output
 # ---------------------------------------------------------------------------
@@ -1006,7 +1018,7 @@ def test_process_logs_debug_tool_dispatch(tmp_path):
     with patch("pmca.chat.chat_completion", side_effect=[tool_req, "Done"]):
         with patch("pmca.chat.parse_attachment_paths", return_value=[]):
             with patch("pmca.chat.execute_read_file", return_value="content"):
-                session.process("read a file")
+                session.send("read a file")
 
     calls = [str(c) for c in logger.log_debug.call_args_list]
     assert any("read_file" in c for c in calls)
@@ -1021,7 +1033,7 @@ def test_process_logs_debug_history_trim():
 
     with patch("pmca.chat.chat_completion", return_value="reply"):
         with patch("pmca.chat.parse_attachment_paths", return_value=[]):
-            session.process("new message")
+            session.send("new message")
 
     calls = [str(c) for c in logger.log_debug.call_args_list]
     assert any("trim" in c.lower() for c in calls)
@@ -1034,7 +1046,7 @@ def test_process_logs_debug_attachment_resolved(tmp_path):
     with patch("pmca.chat.chat_completion", return_value="reply"):
         with patch("pmca.chat.parse_attachment_paths", return_value=[tmp_path / "secret.py"]):
             with patch("pmca.chat.resolve_attachments", return_value=[att]):
-                session.process("here [[/secret.py]]")
+                session.send("here [[/secret.py]]")
 
     calls = [str(c) for c in logger.log_debug.call_args_list]
     assert any("attachment" in c.lower() for c in calls)
@@ -1054,7 +1066,7 @@ def test_process_prints_tool_progress_with_path_for_read_file(capsys, tmp_path):
     with patch("pmca.chat.chat_completion", side_effect=[tool_req, "Done"]):
         with patch("pmca.chat.parse_attachment_paths", return_value=[]):
             with patch("pmca.chat.execute_read_file", return_value="content"):
-                session.process("read a file")
+                session.send("read a file")
 
     out = capsys.readouterr().out
     assert f"[tool: read_file {tmp_path / 'foo.py'}]" in out
@@ -1074,7 +1086,7 @@ def test_process_prints_tool_progress_with_query_for_search(capsys, tmp_path):
     with patch("pmca.chat.chat_completion", side_effect=[tool_req, "Done"]):
         with patch("pmca.chat.parse_attachment_paths", return_value=[]):
             with patch("pmca.chat.execute_search", return_value="no matches"):
-                session.process("search for foo")
+                session.send("search for foo")
 
     out = capsys.readouterr().out
     assert "[tool: search def foo]" in out
@@ -1093,7 +1105,7 @@ def test_process_prints_tool_progress_with_query_for_rag(capsys):
     with patch("pmca.chat.chat_completion", side_effect=[tool_req, "Done"]):
         with patch("pmca.chat.parse_attachment_paths", return_value=[]):
             with patch("pmca.chat.execute_rag_query", return_value="results"):
-                session.process("find auth stuff")
+                session.send("find auth stuff")
 
     out = capsys.readouterr().out
     assert "[tool: query_knowledge_base authentication flow]" in out
@@ -1112,7 +1124,7 @@ def test_process_prints_tool_progress_with_ref_for_git_diff(capsys):
     with patch("pmca.chat.chat_completion", side_effect=[tool_req, "Done"]):
         with patch("pmca.chat.parse_attachment_paths", return_value=[]):
             with patch("pmca.chat.execute_git_diff", return_value="diff output"):
-                session.process("show diff")
+                session.send("show diff")
 
     out = capsys.readouterr().out
     assert "[tool: git_diff main]" in out
@@ -1166,7 +1178,7 @@ def test_process_prints_tool_result_summary_after_dispatch(capsys, tmp_path):
     with patch("pmca.chat.chat_completion", side_effect=[tool_req, "Done"]):
         with patch("pmca.chat.parse_attachment_paths", return_value=[]):
             with patch("pmca.chat.execute_read_file", return_value="a\nb\n"):
-                session.process("read it")
+                session.send("read it")
 
     out = capsys.readouterr().out
     assert "→" in out
@@ -1186,7 +1198,7 @@ def test_process_prints_tool_progress_without_arg_for_unknown_tool(capsys):
     with patch("pmca.chat.chat_completion", side_effect=[tool_req, "Done"]):
         with patch("pmca.chat.parse_attachment_paths", return_value=[]):
             with patch("pmca.chat.execute_git_status", return_value="clean"):
-                session.process("status")
+                session.send("status")
 
     out = capsys.readouterr().out
     assert "[tool: git_status]" in out

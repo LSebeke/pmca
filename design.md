@@ -19,12 +19,19 @@ pmca/
 ├── attachments.py      # [[filepath]] parsing, validation, security prompt
 ├── openai_client.py    # OpenAI API calls with retry logic
 ├── logger.py           # JSONL chat log + debug log writer
-├── resume.py           # JSONL resume: parse log, validate, extract history + context
+├── restore.py          # Session restore: parse JSONL log, validate, reconstruct state
 ├── types.py            # Shared types: Chunk, Attachment, ScratchpadEntry, ActiveSkill, ToolCallRequest
-└── rag/
-    ├── chunker.py      # File → Chunk list (semantic / AST-based)
-    ├── embedder.py     # Thin embed() interface over OpenAI embeddings
-    └── store.py        # In-memory vector store + disk cache
+├── rag/
+│   ├── chunker.py      # File → Chunk list (semantic / AST-based)
+│   ├── embedder.py     # Thin embed() interface over OpenAI embeddings
+│   └── store.py        # In-memory vector store + disk cache
+└── tools/
+    ├── schemas.py      # All _*_SCHEMA dicts and get_tools()
+    ├── fs.py           # Filesystem execute_* functions
+    ├── git.py          # SafeGitOps class and execute_git_* functions
+    ├── rag.py          # execute_rag_query
+    ├── scratchpad.py   # execute_save_to_scratchpad
+    └── testing.py      # execute_run_tests
 ```
 
 ---
@@ -103,7 +110,8 @@ Persists in `ChatSession._scratchpad` across turns and is injected as `[SCRATCHP
 ### 3.5 ActiveSkill
 
 ```python
-class ActiveSkill(NamedTuple):
+@dataclass(frozen=True)
+class ActiveSkill:
     name: str       # directory name, e.g. "tdd"
     content: str    # verbatim content of SKILL.md
     directory: Path # absolute path to the skill directory
@@ -134,7 +142,7 @@ class ToolCallRequest:
     arguments: dict     # parsed JSON arguments, e.g. {"path": "...", "content": "...", "description": "..."}
 ```
 
-Returned by `chat_completion()` when the model issues a tool call instead of a text response. `ChatSession.process()` inspects this, executes the tool, sends the result back, and loops until a text response is received.
+Returned by `chat_completion()` when the model issues a tool call instead of a text response. `ChatSession.send()` inspects this, executes the tool, sends the result back, and loops until a text response is received.
 
 ---
 
@@ -332,7 +340,7 @@ def substitute_identifiers(message: str, attachments: list[Attachment]) -> str:
 class ChatSession:
     config: Config
     store: VectorStore
-    unsafe: bool
+    allow_unsafe_attachments: bool
     system_prompt: str           # active system prompt (from config or log on resume)
     startup_docs: list[tuple[Path, str]]  # active startup docs (from config or log on resume)
     history: list[dict]          # {"role": "user"|"assistant", "content": str}
@@ -340,12 +348,12 @@ class ChatSession:
     session_attachments: list[Attachment]  # all attachments accumulated this session
     _next_attachment_n: int      # session-global counter for CONTEXT_<n> identifiers
     _system_context: str | None  # computed once at __init__ from config.system_context_fields; None if list is empty
-    _turn_seen_chunks: set[tuple[Path, str]]  # (source_file, label) pairs already returned this turn; reset at start of each process()
-    _turn_read_files: set[Path]  # resolved paths read via read_file this turn; reset at start of each process(); gates edit_file and write_file on existing files
+    _turn_seen_chunks: set[tuple[Path, str]]  # (source_file, label) pairs already returned this turn; reset at start of each send()
+    _turn_read_files: set[Path]  # resolved paths read via read_file this turn; reset at start of each send(); gates edit_file and write_file on existing files
     _scratchpad: list[ScratchpadEntry]  # entries the LLM has saved from tool call returns; injected as [SCRATCHPAD_i] system messages each turn
     _active_skills: list[ActiveSkill]   # skills activated via /skill; injected as [SKILL: name] system messages each turn
 
-    def process(self, user_input: str) -> str:
+    def send(self, user_input: str) -> tuple[str | None, int]:
         """
         Full pipeline for one user turn:
           1. Reset _turn_seen_chunks and _turn_read_files to empty sets.
@@ -396,7 +404,7 @@ class ChatSession:
 Module-level helpers:
 
 ```python
-_TOOL_KEY_ARG: dict[str, str]
+_TOOL_PRIMARY_ARG: dict[str, str]
 # Maps each tool name to the argument that best identifies the call target,
 # e.g. "path" for file tools, "query" for RAG/search, "ref" for git diff/log.
 
@@ -469,14 +477,16 @@ def _parse_tool_arguments(raw: str) -> dict:
 
 **Responsibilities:** Define tool schemas and implement execution for all LLM-callable tools. All read tools are gated by `read_allowed_dirs`; writes are gated by `write_allowed_dirs`; git tools are gated by `git_root`; test execution is gated by `test_dir`; RAG tools are gated by store content. Reads and test runs execute without user approval; writes require per-call approval unless `config.auto_approve_writes` is `True`, in which case the prompt is skipped (directory guard still enforced).
 
-The package is split into four submodules; `tools/__init__.py` re-exports all public symbols so callers import from `pmca.tools` unchanged:
+The package is split into six submodules; `tools/__init__.py` re-exports all public symbols so callers import from `pmca.tools` unchanged:
 
 | Submodule | Contents |
 |-----------|----------|
 | `tools/schemas.py` | All `_*_SCHEMA` dicts and `get_tools()` |
 | `tools/git.py` | `SafeGitOps` class and all `execute_git_*` functions |
 | `tools/fs.py` | All filesystem `execute_*` functions and private helpers (`_is_allowed`, `_print_unified_diff`, `_search_file`, `_extract_node_source`) |
-| `tools/misc.py` | `execute_rag_query`, `execute_save_to_scratchpad`, `execute_run_tests` |
+| `tools/rag.py` | `execute_rag_query` and `_format_rag_chunks` |
+| `tools/scratchpad.py` | `execute_save_to_scratchpad` and `_pluralize` |
+| `tools/testing.py` | `execute_run_tests` |
 
 `_is_allowed` lives in `fs.py` and is imported by `git.py` for path validation inside `SafeGitOps`.
 
@@ -817,13 +827,13 @@ class SessionLogger:
 
 ---
 
-### 4.10 `resume.py`
+### 4.10 `restore.py`
 
 **Responsibilities:** Parse a `chat_<timestamp>.jsonl` file, validate it strictly, and return the data needed to bootstrap a resumed session. The log is the authoritative source of truth — no `[RESUMED_CONTEXT]` wrapper is used; the reconstructed fields are injected into `ChatSession` the same way a fresh session would set them.
 
 ```python
 @dataclass
-class ResumedSession:
+class RestoredSession:
     system_prompt: str                      # from "system_prompt" log entry
     startup_docs: list[tuple[Path, str]]    # from "startup_doc" log entries (in order)
     history: list[dict]                     # {"role": "user"|"assistant", "content": str} pairs
@@ -832,7 +842,7 @@ class ResumedSession:
     jsonl_path: Path                        # original path (for logger append)
     next_attachment_n: int                  # max(N for CONTEXT_N in log) + 1; new attachments start here
 
-def load_resume(path: Path) -> ResumedSession:
+def restore_session(path: Path) -> RestoredSession:
     """
     Parse the JSONL at path. Raises ResumeError with a descriptive message on:
       - File not found
@@ -863,7 +873,7 @@ def run_repl(session: ChatSession) -> None:
     Main loop:
       - Read input via prompt_toolkit (history enabled for ↑ recall; Esc clears input).
       - If input starts with '/': dispatch to handle_command().
-      - Otherwise: call session.process(); print response; print trim notice if needed.
+      - Otherwise: call session.send(); print response; print trim notice if needed.
     """
 
 def handle_command(cmd: str, session: ChatSession) -> None:
@@ -880,7 +890,7 @@ def handle_command(cmd: str, session: ChatSession) -> None:
     /exit                 — raise SystemExit
     """
 
-_EXT_TO_FENCE: dict[str, str] = {
+_EXT_TO_LANG: dict[str, str] = {
     ".py": "python",
     ".yaml": "yaml", ".yml": "yaml",
     ".json": "json",
@@ -889,10 +899,10 @@ _EXT_TO_FENCE: dict[str, str] = {
     ".md": "markdown",
 }
 
-def _extract(cmd: str, session: ChatSession) -> None:
+def _handle_extract(cmd: str, session: ChatSession) -> None:
     """
     Parse an absolute file path from cmd. Infer the fence language from the
-    file extension using _EXT_TO_FENCE. Find all fenced blocks of that language
+    file extension using _EXT_TO_LANG. Find all fenced blocks of that language
     in the last assistant message (session.history[-1]). Write them to the path
     separated by blank lines. Print an error if: no argument given, extension is
     unknown (list supported extensions), no history, or no matching blocks found.
@@ -912,11 +922,11 @@ def main() -> None:
     # 2. load_config(config_name)  — exits with error on failure
     # 3. Validate OPENAI_API_KEY in environment
     # 4. Create log_folder and cache_dir
-    # 5. If --resume: call load_resume(path) — exits with error on failure
+    # 5. If --resume: call restore_session(path) — exits with error on failure
     #    Else: instantiate SessionLogger with fresh timestamp
     # 6. Build VectorStore (prints progress)
-    # 7. Instantiate ChatSession; if resuming, set session.history, resumed_context,
-    #    and _next_attachment_n from ResumedSession.next_attachment_n
+    # 7. Instantiate ChatSession; if resuming, set session.history, session_attachments,
+    #    and _next_attachment_n from RestoredSession.next_attachment_n
     # 8. If resuming: print "Resumed N turns from <path>" and "[last response]\n<msg>"
     # 9. run_repl(session)
     # 10. On exit: session.logger.close()
@@ -1018,13 +1028,13 @@ When `--resume <path>` is provided:
      `Warning: config startup_docs differ from log — using log version`
 3. `session.history` is populated from all `exchange` entries.
 4. `session.session_attachments` is populated from all unique attachments across the log (unique by identifier, first-seen order).
-5. `session._next_attachment_n` is set from `ResumedSession.next_attachment_n`.
+5. `session._next_attachment_n` is set from `RestoredSession.next_attachment_n`.
 7. The logger appends to the original JSONL file and its matching debug log — it does NOT write new session-start entries (they are already in the log).
 8. At startup the REPL prints:
    - `Resumed N turns from <path>`
    - `[last response]` followed by the final assistant message from the log
 
-History trimming is lazy: the first `session.process()` call runs `_trim_history` as normal. Message assembly uses the identical `_build_messages` path as a live session.
+History trimming is lazy: the first `session.send()` call runs `_trim_history` as normal. Message assembly uses the identical `_build_messages` path as a live session.
 
 ---
 

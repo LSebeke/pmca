@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import NamedTuple
 
 
 @dataclass
@@ -26,7 +25,8 @@ class ScratchpadEntry:
     content: str  # arbitrary excerpt from a tool call return
 
 
-class ActiveSkill(NamedTuple):
+@dataclass(frozen=True)
+class ActiveSkill:
     name: str
     content: str
     directory: Path

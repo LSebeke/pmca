@@ -42,12 +42,12 @@ class ChatSession:
         config: Config,
         store: VectorStore,
         logger: SessionLogger,
-        unsafe: bool = False,
+        allow_unsafe_attachments: bool = False,
     ) -> None:
         self.config = config
         self.store = store
         self.logger = logger
-        self.unsafe = unsafe
+        self.allow_unsafe_attachments = allow_unsafe_attachments
         self.system_prompt: str = config.system_prompt
         self.startup_docs: list[tuple] = list(getattr(config, "startup_docs", []))
         self.history: list[dict] = []
@@ -61,7 +61,7 @@ class ChatSession:
         self._system_context: str | None = _build_system_context(config.system_context_fields)
         logger.log_debug(f"session started: name={config.name}, model={config.model}")
 
-    def process(self, user_input: str) -> tuple[str | None, int]:
+    def send(self, user_input: str) -> tuple[str | None, int]:
         # 1. Reset per-turn state
         self._turn_seen_chunks = set()
         self._turn_read_files = set()
@@ -70,7 +70,7 @@ class ChatSession:
         # 2. Attachments
         try:
             paths = parse_attachment_paths(user_input)
-            attachments = resolve_attachments(paths, self.config.max_attachment_kb, self.unsafe, start_n=self._next_attachment_n)
+            attachments = resolve_attachments(paths, self.config.max_attachment_kb, self.allow_unsafe_attachments, start_n=self._next_attachment_n)
         except AttachmentAborted:
             print("[message cancelled]")
             return None, 0
@@ -251,7 +251,7 @@ def _format_scratchpad_entry(i: int, entry: "ScratchpadEntry") -> str:
     return f"[SCRATCHPAD_{i}]\nTitle: {entry.title}\n---\n{entry.content}\n---"
 
 
-_TOOL_KEY_ARG: dict[str, str] = {
+_TOOL_PRIMARY_ARG: dict[str, str] = {
     "read_file": "path", "write_file": "path", "edit_file": "path",
     "insert_at_line": "path", "delete_file": "path", "move_file": "path",
     "list_dir": "path", "get_definition": "path",
@@ -277,7 +277,7 @@ def _tool_result_summary(name: str, result: str, approved: bool) -> str:
 
 
 def _tool_progress(name: str, args: dict) -> str:
-    key = _TOOL_KEY_ARG.get(name)
+    key = _TOOL_PRIMARY_ARG.get(name)
     val = args.get(key) if key else None
     return f"[tool: {name} {val}]" if val else f"[tool: {name}]"
 
