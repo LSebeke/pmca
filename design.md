@@ -465,9 +465,20 @@ def _parse_tool_arguments(raw: str) -> dict:
 
 ---
 
-### 4.8 `tools.py`
+### 4.8 `tools/` package
 
 **Responsibilities:** Define tool schemas and implement execution for all LLM-callable tools. All read tools are gated by `read_allowed_dirs`; writes are gated by `write_allowed_dirs`; git tools are gated by `git_root`; test execution is gated by `test_dir`; RAG tools are gated by store content. Reads and test runs execute without user approval; writes require per-call approval unless `config.auto_approve_writes` is `True`, in which case the prompt is skipped (directory guard still enforced).
+
+The package is split into four submodules; `tools/__init__.py` re-exports all public symbols so callers import from `pmca.tools` unchanged:
+
+| Submodule | Contents |
+|-----------|----------|
+| `tools/schemas.py` | All `_*_SCHEMA` dicts and `get_tools()` |
+| `tools/git.py` | `SafeGitOps` class and all `execute_git_*` functions |
+| `tools/fs.py` | All filesystem `execute_*` functions and private helpers (`_is_allowed`, `_print_unified_diff`, `_search_file`, `_extract_node_source`) |
+| `tools/misc.py` | `execute_rag_query`, `execute_save_to_scratchpad`, `execute_run_tests` |
+
+`_is_allowed` lives in `fs.py` and is imported by `git.py` for path validation inside `SafeGitOps`.
 
 When `auto_approve_writes` is `False`, a unified diff is always printed before the approval prompt for `edit_file`, `write_file` (existing files only), and `insert_at_line`. When `auto_approve_writes` is `True` and `config.show_diff_on_auto_approve` is `True`, the diff is printed after the write completes (no prompt). The helper `_print_unified_diff(old, new, path)` computes the diff via `difflib.unified_diff`.
 
