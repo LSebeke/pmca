@@ -640,19 +640,19 @@ def test_help_mentions_auto_approve_writes(capsys):
     assert "auto_approve_writes" in capsys.readouterr().out
 
 
-# Phase 3 — /set show_diff_on_approve
+# Phase 3 — /set show_diff_on_auto_approve
 
-def test_set_show_diff_on_approve_false():
+def test_set_show_diff_on_auto_approve_true():
     session = _session()
     session.config = MagicMock()
-    session.config.show_diff_on_approve = True
-    handle_command("/set show_diff_on_approve=false", session)
-    assert session.config.show_diff_on_approve is False
+    session.config.show_diff_on_auto_approve = False
+    handle_command("/set show_diff_on_auto_approve=true", session)
+    assert session.config.show_diff_on_auto_approve is True
 
 
-def test_set_show_diff_on_approve_true():
+def test_set_show_diff_on_auto_approve_false():
     session = _session()
     session.config = MagicMock()
-    session.config.show_diff_on_approve = False
-    handle_command("/set show_diff_on_approve=true", session)
-    assert session.config.show_diff_on_approve is True
+    session.config.show_diff_on_auto_approve = True
+    handle_command("/set show_diff_on_auto_approve=false", session)
+    assert session.config.show_diff_on_auto_approve is False

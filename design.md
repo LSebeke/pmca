@@ -45,7 +45,7 @@ class Config:
     write_allowed_dirs: list[Path] = field(default_factory=list)  # absolute paths; empty → write_file tool not registered
     read_allowed_dirs: list[Path] = field(default_factory=list)   # absolute paths; empty → read_file/list_dir/search tools not registered
     auto_approve_writes: bool = False                              # skip per-op approval prompt for write ops within write_allowed_dirs
-    show_diff_on_approve: bool = True                              # print unified diff before approval prompt; no effect when auto_approve_writes=True
+    show_diff_on_auto_approve: bool = False                        # print unified diff even when auto_approve_writes=True (write proceeds without prompt)
     system_context_fields: list[str] = field(default_factory=list)  # empty by default → no system context injected
     rag_shallow_k: int = 3       # chunks returned for depth="shallow"
     rag_medium_k: int = 7        # chunks returned for depth="medium"
@@ -451,7 +451,7 @@ def _parse_tool_arguments(raw: str) -> dict:
 
 **Responsibilities:** Define tool schemas and implement execution for all LLM-callable tools. All read tools are gated by `read_allowed_dirs`; writes are gated by `write_allowed_dirs`; git tools are gated by `git_root`; test execution is gated by `test_dir`; RAG tools are gated by store content. Reads and test runs execute without user approval; writes require per-call approval unless `config.auto_approve_writes` is `True`, in which case the prompt is skipped (directory guard still enforced).
 
-When `auto_approve_writes` is `False` and `config.show_diff_on_approve` is `True` (the default), a unified diff is printed before the approval prompt for `edit_file`, `write_file` (existing files only), and `insert_at_line`. The helper `_print_unified_diff(old, new, path)` computes the diff via `difflib.unified_diff`. Setting `show_diff_on_approve=False` suppresses the diff but preserves the approval prompt.
+When `auto_approve_writes` is `False`, a unified diff is always printed before the approval prompt for `edit_file`, `write_file` (existing files only), and `insert_at_line`. When `auto_approve_writes` is `True` and `config.show_diff_on_auto_approve` is `True`, the diff is printed after the write completes (no prompt). The helper `_print_unified_diff(old, new, path)` computes the diff via `difflib.unified_diff`.
 
 #### Re-read-after-edit safety
 
@@ -1002,7 +1002,7 @@ History trimming is lazy: the first `session.process()` call runs `_trim_history
 | `/set history_token_budget=N` | Set history token budget for this session |
 | `/set test_timeout=N` | Set test run timeout (seconds) for this session |
 | `/set auto_approve_writes=true\|false` | Skip (or restore) per-op write approval prompts for this session; directory guard still applies |
-| `/set show_diff_on_approve=true\|false` | Show (or suppress) unified diff before approval prompt; has no effect when `auto_approve_writes=true` |
+| `/set show_diff_on_auto_approve=true\|false` | Print unified diff even when auto-approving writes; write still proceeds without a keypress |
 | `/extract <path>` | Extract code blocks from the last response into `<path>`; fence language inferred from extension (`.py`, `.yaml`/`.yml`, `.json`, `.toml`, `.sh`) |
 | `/scratchpad` | Print all scratchpad entries (title + content); prints "Scratchpad is empty." if none exist |
 | `/skill` | List available skills (`*` = active); requires `skills_dir` configured |
@@ -1037,8 +1037,8 @@ Key bindings:
 | Unexpected exit / crash | Partial JSONL log is valid; no finalisation step needed |
 | write_file path outside allowed dirs | Tool returns error string to model; user is not prompted |
 | User denies write_file | Tool returns `"Write denied by user. Path: ..."` to model; session continues |
-| `auto_approve_writes=true` | Approval prompt skipped for all write ops; `write_allowed_dirs` guard still enforced; diff not shown |
-| `show_diff_on_approve=false` | Unified diff suppressed before approval prompt; prompt still shown |
+| `auto_approve_writes=true` | Approval prompt skipped for all write ops; `write_allowed_dirs` guard still enforced; diff not shown unless `show_diff_on_auto_approve=true` |
+| `show_diff_on_auto_approve=true` | Unified diff printed after auto-approved write; write still proceeds without a keypress |
 | write_file I/O error (e.g. permission denied) | Tool returns error string to model; session continues |
 | edit_file path outside allowed dirs | Tool returns error string to model; user is not prompted |
 | edit_file file not found | Tool returns error string to model; user is not prompted |

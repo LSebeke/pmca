@@ -681,13 +681,16 @@ def execute_write_file(arguments: dict, config: Config, turn_read_files: set[Pat
     if not config.auto_approve_writes:
         print(f"[write_file] {target} ({size} bytes)")
         print(f"Reason: {reason}")
-        if config.show_diff_on_approve and target.exists():
+        if target.exists():
             old = target.read_text(encoding="utf-8")
             _print_unified_diff(old, content, target)
         print(f"{exists_msg} Approve? [y/N] ", end="", flush=True)
         answer = input()
         if answer.strip().lower() != "y":
             return False, f"Write denied by user. Path: {target}"
+    elif config.show_diff_on_auto_approve and target.exists():
+        old = target.read_text(encoding="utf-8")
+        _print_unified_diff(old, content, target)
 
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(content, encoding="utf-8")
@@ -729,12 +732,13 @@ def execute_edit_file(arguments: dict, config: Config, turn_read_files: set[Path
     if not config.auto_approve_writes:
         print(f"[edit_file] {target}")
         print(f"Reason: {reason}")
-        if config.show_diff_on_approve:
-            _print_unified_diff(content, new_content, target)
+        _print_unified_diff(content, new_content, target)
         print("Approve? [y/N] ", end="", flush=True)
         answer = input()
         if answer.strip().lower() != "y":
             return False, f"Edit denied by user. Path: {target}"
+    elif config.show_diff_on_auto_approve:
+        _print_unified_diff(content, new_content, target)
     try:
         target.write_text(new_content, encoding="utf-8")
     except OSError as e:
@@ -785,12 +789,13 @@ def execute_insert_at_line(arguments: dict, config: Config, turn_read_files: set
     if not config.auto_approve_writes:
         print(f"[insert_at_line] {target} (line {line_number}, mode={mode})")
         print(f"Reason: {reason}")
-        if config.show_diff_on_approve:
-            _print_unified_diff("".join(lines), "".join(new_lines), target)
+        _print_unified_diff("".join(lines), "".join(new_lines), target)
         print("Approve? [y/N] ", end="", flush=True)
         answer = input()
         if answer.strip().lower() != "y":
             return False, f"Edit denied by user. Path: {target}"
+    elif config.show_diff_on_auto_approve:
+        _print_unified_diff("".join(lines), "".join(new_lines), target)
 
     if mode == "before":
         lines.insert(idx, content if content.endswith("\n") else content + "\n")
