@@ -616,6 +616,20 @@ def test_git_root_raises_when_does_not_exist(tmp_path):
         load_config(str(cfg_path))
 
 
+def test_auto_approve_writes_defaults_false():
+    cfg = Config(name="x", model="m", system_prompt="s", rag_files=[], log_folder=Path("/tmp"))
+    assert cfg.auto_approve_writes is False
+
+
+def test_auto_approve_writes_loads_true_from_yaml(tmp_path):
+    rag_file = tmp_path / "code.py"
+    rag_file.write_text("x = 1")
+    yaml_content = minimal_yaml(rag_file, tmp_path / "logs") + "auto_approve_writes: true\n"
+    cfg_path = write_yaml(tmp_path, "c.yaml", yaml_content)
+    cfg = load_config(str(cfg_path))
+    assert cfg.auto_approve_writes is True
+
+
 @pytest.mark.parametrize("field,value", [
     ("max_attachment_kb", 0),
     ("max_attachment_kb", -1),

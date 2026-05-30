@@ -44,6 +44,7 @@ class Config:
     startup_docs: list[tuple[Path, str]] = field(default_factory=list)  # (path, content) pairs; loaded at config parse time
     write_allowed_dirs: list[Path] = field(default_factory=list)  # absolute paths; empty → write_file tool not registered
     read_allowed_dirs: list[Path] = field(default_factory=list)   # absolute paths; empty → read_file/list_dir/search tools not registered
+    auto_approve_writes: bool = False                              # skip per-op approval prompt for write ops within write_allowed_dirs
     system_context_fields: list[str] = field(default_factory=list)  # empty by default → no system context injected
     rag_shallow_k: int = 3       # chunks returned for depth="shallow"
     rag_medium_k: int = 7        # chunks returned for depth="medium"
@@ -417,7 +418,7 @@ Permanent errors: `AuthenticationError`, `BadRequestError`, other `APIStatusErro
 
 ### 4.8 `tools.py`
 
-**Responsibilities:** Define tool schemas and implement execution for all LLM-callable tools. All read tools are gated by `read_allowed_dirs`; writes are gated by `write_allowed_dirs`; git tools are gated by `git_root`; test execution is gated by `test_dir`; RAG tools are gated by store content. Reads and test runs execute without user approval; writes require per-call approval.
+**Responsibilities:** Define tool schemas and implement execution for all LLM-callable tools. All read tools are gated by `read_allowed_dirs`; writes are gated by `write_allowed_dirs`; git tools are gated by `git_root`; test execution is gated by `test_dir`; RAG tools are gated by store content. Reads and test runs execute without user approval; writes require per-call approval unless `config.auto_approve_writes` is `True`, in which case the prompt is skipped (directory guard still enforced).
 
 #### Re-read-after-edit safety
 
@@ -799,7 +800,7 @@ def run_repl(session: ChatSession) -> None:
 
 def handle_command(cmd: str, session: ChatSession) -> None:
     """
-    /set <param>=<value>  — update session.history_token_budget or session.config.test_timeout
+    /set <param>=<value>  — update session.history_token_budget, session.config.test_timeout, or session.config.auto_approve_writes (true/false)
     /extract <path>       — write code blocks from last response to <path> (fence language inferred from extension)
     /scratchpad           — print all scratchpad entries (title + content for each); print
                             "Scratchpad is empty." when none exist
@@ -967,6 +968,7 @@ History trimming is lazy: the first `session.process()` call runs `_trim_history
 | `/read remove <path>` | Remove a directory from `read_allowed_dirs` for this session (requires user approval) |
 | `/set history_token_budget=N` | Set history token budget for this session |
 | `/set test_timeout=N` | Set test run timeout (seconds) for this session |
+| `/set auto_approve_writes=true\|false` | Skip (or restore) per-op write approval prompts for this session; directory guard still applies |
 | `/extract <path>` | Extract code blocks from the last response into `<path>`; fence language inferred from extension (`.py`, `.yaml`/`.yml`, `.json`, `.toml`, `.sh`) |
 | `/scratchpad` | Print all scratchpad entries (title + content); prints "Scratchpad is empty." if none exist |
 | `/skill` | List available skills (`*` = active); requires `skills_dir` configured |
@@ -1000,6 +1002,7 @@ Key bindings:
 | Unexpected exit / crash | Partial JSONL log is valid; no finalisation step needed |
 | write_file path outside allowed dirs | Tool returns error string to model; user is not prompted |
 | User denies write_file | Tool returns `"Write denied by user. Path: ..."` to model; session continues |
+| `auto_approve_writes=true` | Approval prompt skipped for all write ops; `write_allowed_dirs` guard still enforced |
 | write_file I/O error (e.g. permission denied) | Tool returns error string to model; session continues |
 | edit_file path outside allowed dirs | Tool returns error string to model; user is not prompted |
 | edit_file file not found | Tool returns error string to model; user is not prompted |

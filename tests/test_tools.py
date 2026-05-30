@@ -677,6 +677,86 @@ def test_execute_creates_parent_directories(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# auto_approve_writes — skips prompt for write ops
+# ---------------------------------------------------------------------------
+
+def test_write_file_skips_prompt_when_auto_approve(tmp_path):
+    allowed = tmp_path / "out"
+    allowed.mkdir()
+    target = allowed / "f.py"
+    cfg = _config(write_allowed_dirs=[allowed], auto_approve_writes=True)
+    args = {"path": str(target), "content": "x = 1\n", "description": "d"}
+
+    with patch("builtins.input", side_effect=AssertionError("should not prompt")):
+        ok, _ = execute_write_file(args, cfg, set())
+
+    assert ok is True
+    assert target.read_text() == "x = 1\n"
+
+
+def test_edit_file_skips_prompt_when_auto_approve(tmp_path):
+    allowed = tmp_path / "out"
+    allowed.mkdir()
+    f = allowed / "f.py"
+    f.write_text("x = 1\n")
+    cfg = _config(write_allowed_dirs=[allowed], auto_approve_writes=True)
+    args = {"path": str(f), "old_string": "x = 1", "new_string": "x = 2", "description": "d"}
+
+    with patch("builtins.input", side_effect=AssertionError("should not prompt")):
+        ok, _ = execute_edit_file(args, cfg, {f.resolve()})
+
+    assert ok is True
+    assert f.read_text() == "x = 2\n"
+
+
+def test_insert_at_line_skips_prompt_when_auto_approve(tmp_path):
+    allowed = tmp_path / "out"
+    allowed.mkdir()
+    f = allowed / "f.py"
+    f.write_text("a\nb\n")
+    cfg = _config(write_allowed_dirs=[allowed], auto_approve_writes=True)
+    args = {"path": str(f), "line_number": 1, "content": "# top", "mode": "before", "description": "d"}
+
+    with patch("builtins.input", side_effect=AssertionError("should not prompt")):
+        ok, _ = execute_insert_at_line(args, cfg, {f.resolve()})
+
+    assert ok is True
+    assert f.read_text().startswith("# top")
+
+
+def test_delete_file_skips_prompt_when_auto_approve(tmp_path):
+    allowed = tmp_path / "out"
+    allowed.mkdir()
+    f = allowed / "f.py"
+    f.write_text("x = 1\n")
+    cfg = _config(write_allowed_dirs=[allowed], auto_approve_writes=True)
+    args = {"path": str(f), "description": "d"}
+
+    with patch("builtins.input", side_effect=AssertionError("should not prompt")):
+        ok, _ = execute_delete_file(args, cfg, {f.resolve()})
+
+    assert ok is True
+    assert not f.exists()
+
+
+def test_move_file_skips_prompt_when_auto_approve(tmp_path):
+    allowed = tmp_path / "out"
+    allowed.mkdir()
+    src = allowed / "a.py"
+    dst = allowed / "b.py"
+    src.write_text("x = 1\n")
+    cfg = _config(write_allowed_dirs=[allowed], auto_approve_writes=True)
+    args = {"src": str(src), "dst": str(dst), "description": "d"}
+
+    with patch("builtins.input", side_effect=AssertionError("should not prompt")):
+        ok, _ = execute_move_file(args, cfg, {src.resolve()})
+
+    assert ok is True
+    assert dst.exists()
+    assert not src.exists()
+
+
+# ---------------------------------------------------------------------------
 # get_tools — run_tests registration
 # ---------------------------------------------------------------------------
 

@@ -677,13 +677,13 @@ def execute_write_file(arguments: dict, config: Config, turn_read_files: set[Pat
     size = len(content.encode())
     exists_msg = "File exists — will be overwritten." if target.exists() else "File does not exist."
 
-    print(f"[write_file] {target} ({size} bytes)")
-    print(f"Reason: {reason}")
-    print(f"{exists_msg} Approve? [y/N] ", end="", flush=True)
-    answer = input()
-
-    if answer.strip().lower() != "y":
-        return False, f"Write denied by user. Path: {target}"
+    if not config.auto_approve_writes:
+        print(f"[write_file] {target} ({size} bytes)")
+        print(f"Reason: {reason}")
+        print(f"{exists_msg} Approve? [y/N] ", end="", flush=True)
+        answer = input()
+        if answer.strip().lower() != "y":
+            return False, f"Write denied by user. Path: {target}"
 
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(content, encoding="utf-8")
@@ -720,18 +720,18 @@ def execute_edit_file(arguments: dict, config: Config, turn_read_files: set[Path
     if count > 1:
         return False, f"Error: old_string is ambiguous ({count} occurrences) in {target}; provide more context"
 
-    print(f"[edit_file] {target}")
-    print(f"Reason: {reason}")
-    print("--- remove ---")
-    print(old_string)
-    print("--- insert ---")
-    print(new_string)
-    print("---")
-    print("Approve? [y/N] ", end="", flush=True)
-    answer = input()
-
-    if answer.strip().lower() != "y":
-        return False, f"Edit denied by user. Path: {target}"
+    if not config.auto_approve_writes:
+        print(f"[edit_file] {target}")
+        print(f"Reason: {reason}")
+        print("--- remove ---")
+        print(old_string)
+        print("--- insert ---")
+        print(new_string)
+        print("---")
+        print("Approve? [y/N] ", end="", flush=True)
+        answer = input()
+        if answer.strip().lower() != "y":
+            return False, f"Edit denied by user. Path: {target}"
 
     new_content = content.replace(old_string, new_string, 1)
     try:
@@ -773,18 +773,18 @@ def execute_insert_at_line(arguments: dict, config: Config, turn_read_files: set
     idx = line_number - 1
     target_line = lines[idx].rstrip("\n")
 
-    print(f"[insert_at_line] {target} (line {line_number}, mode={mode})")
-    print(f"Reason: {reason}")
-    print("--- target line ---")
-    print(target_line)
-    print("--- insert ---")
-    print(content)
-    print("---")
-    print("Approve? [y/N] ", end="", flush=True)
-    answer = input()
-
-    if answer.strip().lower() != "y":
-        return False, f"Edit denied by user. Path: {target}"
+    if not config.auto_approve_writes:
+        print(f"[insert_at_line] {target} (line {line_number}, mode={mode})")
+        print(f"Reason: {reason}")
+        print("--- target line ---")
+        print(target_line)
+        print("--- insert ---")
+        print(content)
+        print("---")
+        print("Approve? [y/N] ", end="", flush=True)
+        answer = input()
+        if answer.strip().lower() != "y":
+            return False, f"Edit denied by user. Path: {target}"
 
     if mode == "before":
         lines.insert(idx, content if content.endswith("\n") else content + "\n")
@@ -818,13 +818,13 @@ def execute_delete_file(arguments: dict, config: Config, turn_read_files: set[Pa
     if target not in turn_read_files:
         return False, f"Error: {target} has not been read this turn. Call read_file first."
 
-    print(f"[delete_file] {target}")
-    print(f"Reason: {reason}")
-    print("Approve? [y/N] ", end="", flush=True)
-    answer = input()
-
-    if answer.strip().lower() != "y":
-        return False, f"Delete denied by user. Path: {target}"
+    if not config.auto_approve_writes:
+        print(f"[delete_file] {target}")
+        print(f"Reason: {reason}")
+        print("Approve? [y/N] ", end="", flush=True)
+        answer = input()
+        if answer.strip().lower() != "y":
+            return False, f"Delete denied by user. Path: {target}"
 
     try:
         target.unlink()
@@ -854,13 +854,13 @@ def execute_move_file(arguments: dict, config: Config, turn_read_files: set[Path
     if src not in turn_read_files:
         return False, f"Error: {src} has not been read this turn. Call read_file first."
 
-    print(f"[move_file] {src} → {dst}")
-    print(f"Reason: {reason}")
-    print("Approve? [y/N] ", end="", flush=True)
-    answer = input()
-
-    if answer.strip().lower() != "y":
-        return False, f"Move denied by user. src: {src}"
+    if not config.auto_approve_writes:
+        print(f"[move_file] {src} → {dst}")
+        print(f"Reason: {reason}")
+        print("Approve? [y/N] ", end="", flush=True)
+        answer = input()
+        if answer.strip().lower() != "y":
+            return False, f"Move denied by user. src: {src}"
 
     try:
         dst.parent.mkdir(parents=True, exist_ok=True)

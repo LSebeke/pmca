@@ -605,3 +605,36 @@ def test_skill_remove_not_active_prints_error(tmp_path, capsys):
 def test_help_mentions_skill(capsys):
     handle_command("/help", _session())
     assert "/skill" in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------------
+# handle_command — /set auto_approve_writes
+# ---------------------------------------------------------------------------
+
+def test_set_auto_approve_writes_true():
+    session = _session()
+    session.config = MagicMock()
+    session.config.auto_approve_writes = False
+    handle_command("/set auto_approve_writes=true", session)
+    assert session.config.auto_approve_writes is True
+
+
+def test_set_auto_approve_writes_false():
+    session = _session()
+    session.config = MagicMock()
+    session.config.auto_approve_writes = True
+    handle_command("/set auto_approve_writes=false", session)
+    assert session.config.auto_approve_writes is False
+
+
+def test_set_auto_approve_writes_invalid_prints_error(capsys):
+    session = _session()
+    session.config = MagicMock()
+    handle_command("/set auto_approve_writes=maybe", session)
+    out = capsys.readouterr().out
+    assert out.strip()
+
+
+def test_help_mentions_auto_approve_writes(capsys):
+    handle_command("/help", _session())
+    assert "auto_approve_writes" in capsys.readouterr().out
